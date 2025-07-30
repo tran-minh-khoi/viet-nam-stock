@@ -1,4 +1,7 @@
 {
+   "name": "pd-citizen-stock",
+   "version": "1.0",
+   "description": "Citizen Stock Services",
    "scripts": {
       "production": "bash deploy.sh",
       "prod": "yarn production"
