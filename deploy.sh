@@ -6,10 +6,12 @@ set -a
 source .env
 set +a
 
-echo "🚀 [1/5] Kiểm tra virtualenv..."
-if ! command -v virtualenv &> /dev/null; then
-  echo "🔧 Cài đặt virtualenv..."
-  pip install virtualenv
+echo "🚀 Kiểm tra môi trường ảo..."
+if [ ! -d "$VENV_DIR" ]; then
+  echo "🔧 Đang tạo môi trường ảo bằng python3 -m venv..."
+  python3 -m venv "$VENV_DIR"
+else
+  echo "✅ Môi trường ảo đã tồn tại."
 fi
 
 echo "🔒 [2/5] Tạo môi trường ảo nếu chưa có..."
