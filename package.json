@@ -1,0 +1,6 @@
+{
+   "scripts": {
+      "production": "bash deploy.sh",
+      "prod": "yarn production"
+   }
+}

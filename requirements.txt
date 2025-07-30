@@ -25,3 +25,4 @@ typing_extensions==4.14.1
 urllib3==2.5.0
 uvicorn==0.35.0
 vnstock==3.2.6
+gunicorn

@@ -125,8 +125,8 @@ GET /health
 ## Running the API locally
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Setup Python virtual environment and install dependencies
+bash setup.sh
 
 # Run the API
 python api.py
