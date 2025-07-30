@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "citizen-api",
+      name: "citizen-stock",
       script: "./start.sh",
       interpreter: "/bin/bash",
     }

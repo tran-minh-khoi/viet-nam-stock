@@ -13,4 +13,4 @@ if [ -z "$APP_MODULE" ] || [ -z "$APP_PORT" ]; then
 fi
 
 # Chạy gunicorn từ môi trường ảo
-./venv/bin/gunicorn -k uvicorn.workers.UvicornWorker "$APP_MODULE" --workers 4 --bind 0.0.0.0:$APP_PORT
+./"$VENV_DIR"/bin/gunicorn -k uvicorn.workers.UvicornWorker "$APP_MODULE" --workers 4 --bind 0.0.0.0:$APP_PORT
