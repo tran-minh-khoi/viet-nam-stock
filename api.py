@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import asyncio
+import math
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import pandas as pd
@@ -26,6 +27,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def calculate_ceiling_floor(ref_price):
+    """
+    Tính giá trần sàn theo quy định thị trường chứng khoán Việt Nam
+    - Giá trần: làm tròn xuống (floor) để không vượt quá mức cho phép  
+    - Giá sàn: làm tròn lên (ceil) để không thấp hơn mức cho phép
+    """
+    # Xác định tick size dựa trên giá tham chiếu
+    if ref_price < 10:
+        tick_size = 0.01
+    elif ref_price < 50:
+        tick_size = 0.05
+    elif ref_price < 100:
+        tick_size = 0.1
+    elif ref_price < 500:
+        tick_size = 0.5
+    else:
+        tick_size = 1.0
+    
+    # Tính giá trần sàn (±7%)
+    ceiling_raw = ref_price * 1.07
+    floor_raw = ref_price * 0.93
+    
+    # Làm tròn theo quy tắc thị trường:
+    # - Giá trần: làm tròn xuống (floor)
+    # - Giá sàn: làm tròn lên (ceil)
+    ceiling = math.floor(ceiling_raw / tick_size) * tick_size
+    floor = math.ceil(floor_raw / tick_size) * tick_size
+    
+    return round(ceiling, 2), round(floor, 2)
 
 @app.get("/")
 async def root():
@@ -108,30 +139,6 @@ async def get_stock_today(symbol: str = "PDR", recent: Optional[int] = None):
                                 previous_data = data.iloc[i + 1]
                                 reference_price = float(previous_data['close'])
                             break
-                
-                # Hàm tính giá trần sàn với tick size
-                def calculate_ceiling_floor(ref_price):
-                    # Xác định tick size dựa trên giá tham chiếu
-                    if ref_price < 10:
-                        tick_size = 0.01
-                    elif ref_price < 50:
-                        tick_size = 0.05
-                    elif ref_price < 100:
-                        tick_size = 0.1
-                    elif ref_price < 500:
-                        tick_size = 0.5
-                    else:
-                        tick_size = 1.0
-                    
-                    # Tính giá trần sàn
-                    ceiling_raw = ref_price * 1.07
-                    floor_raw = ref_price * 0.93
-                    
-                    # Làm tròn theo tick size
-                    ceiling = round(ceiling_raw / tick_size) * tick_size
-                    floor = round(floor_raw / tick_size) * tick_size
-                    
-                    return round(ceiling, 2), round(floor, 2)
                 
                 ceiling, floor = calculate_ceiling_floor(reference_price)
                 
@@ -219,30 +226,6 @@ async def get_stock_recent(symbol: str, days: int = 7):
                 
                 # Lấy giá tham chiếu cho từng phiên (giá đóng cửa phiên trước đó)
                 all_sessions = history_df.sort_values('time', ascending=False)
-                
-                # Hàm tính giá trần sàn với tick size
-                def calculate_ceiling_floor(ref_price):
-                    # Xác định tick size dựa trên giá tham chiếu
-                    if ref_price < 10:
-                        tick_size = 0.01
-                    elif ref_price < 50:
-                        tick_size = 0.05
-                    elif ref_price < 100:
-                        tick_size = 0.1
-                    elif ref_price < 500:
-                        tick_size = 0.5
-                    else:
-                        tick_size = 1.0
-                    
-                    # Tính giá trần sàn
-                    ceiling_raw = ref_price * 1.07
-                    floor_raw = ref_price * 0.93
-                    
-                    # Làm tròn theo tick size
-                    ceiling = round(ceiling_raw / tick_size) * tick_size
-                    floor = round(floor_raw / tick_size) * tick_size
-                    
-                    return round(ceiling, 2), round(floor, 2)
                 
                 for i, row in recent_df.iterrows():
                     session_date = pd.to_datetime(row['time']).strftime('%Y-%m-%d')
@@ -357,30 +340,6 @@ async def get_stock_range(
                 # Sort theo thời gian tăng dần
                 data = data.sort_values('time', ascending=True)
                 all_data = all_data.sort_values('time', ascending=False)
-                
-                # Hàm tính giá trần sàn với tick size
-                def calculate_ceiling_floor(ref_price):
-                    # Xác định tick size dựa trên giá tham chiếu
-                    if ref_price < 10:
-                        tick_size = 0.01
-                    elif ref_price < 50:
-                        tick_size = 0.05
-                    elif ref_price < 100:
-                        tick_size = 0.1
-                    elif ref_price < 500:
-                        tick_size = 0.5
-                    else:
-                        tick_size = 1.0
-                    
-                    # Tính giá trần sàn
-                    ceiling_raw = ref_price * 1.07
-                    floor_raw = ref_price * 0.93
-                    
-                    # Làm tròn theo tick size
-                    ceiling = round(ceiling_raw / tick_size) * tick_size
-                    floor = round(floor_raw / tick_size) * tick_size
-                    
-                    return round(ceiling, 2), round(floor, 2)
                 
                 # Chuyển đổi dữ liệu
                 result = []
