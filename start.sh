@@ -2,6 +2,7 @@
 
 # Dừng nếu có lỗi
 set -e
+source .env
 
 # Ghi log để debug (nếu cần)
 echo "🔧 Starting gunicorn with APP_MODULE=${APP_MODULE}, APP_PORT=${APP_PORT}"
