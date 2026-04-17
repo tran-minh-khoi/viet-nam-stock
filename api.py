@@ -95,7 +95,8 @@ async def get_stock_today(symbol: str = "PDR", recent: Optional[int] = None):
                 stock = None
                 try:
                     stock = Vnstock().stock(symbol=symbol, source='VCI')
-                    print(stock)
+                    logger.info(f"type(stock) = {type(stock)}")
+                    logger.info(f"type(stock) = {dir(stock)}")
                 except KeyError:
                     logger.exception("Lỗi khi lấy dữ liệu chứng khoán VCI")
                     return None
