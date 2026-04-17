@@ -100,9 +100,9 @@ async def get_stock_today(symbol: str = "PDR", recent: Optional[int] = None):
                 #     return None
 
                 try:
-                    stock = Vnstock().stock(symbol=symbol, source='SSI')
+                    stock = Vnstock().stock(symbol=symbol, source='TCBS')
                 except KeyError:
-                    logger.exception("Lỗi khi lấy dữ liệu chứng khoán SSI")
+                    logger.exception("Lỗi khi lấy dữ liệu chứng khoán TCBS")
                     return None
 
                 # Lấy dữ liệu 60 ngày gần đây để đảm bảo có đủ phiên giao dịch
