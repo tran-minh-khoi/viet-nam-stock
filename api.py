@@ -87,10 +87,16 @@ async def get_stock_today(symbol: str = "PDR", recent: Optional[int] = None):
         # Hàm lấy dữ liệu phiên hôm nay và phiên gần nhất trước đó
         def get_stock_data():
             try:
-                stock = Vnstock().stock(symbol=symbol, source='VCI')
-                print(type(stock))
-                print(dir(stock))
-                print(stock)
+                # stock = Vnstock().stock(symbol=symbol, source='VCI')
+                # print(type(stock))
+                # print(dir(stock))
+                # print(stock)
+                stock = None
+                try:
+                    stock = Vnstock().stock(symbol=symbol, source='VCI')
+                except KeyError:
+                    logger.error(f"Không có data cho symbol={symbol}")
+                    return None
 
                 # Lấy dữ liệu 60 ngày gần đây để đảm bảo có đủ phiên giao dịch
                 end_date = datetime.now().strftime('%Y-%m-%d')
