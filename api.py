@@ -93,16 +93,11 @@ async def get_stock_today(symbol: str = "PDR", recent: Optional[int] = None):
                 # print(stock)
 
                 stock = None
-                # try:
-                #     stock = Vnstock().stock(symbol=symbol, source='VCI')
-                # except KeyError:
-                #     logger.exception("Lỗi khi lấy dữ liệu chứng khoán VCI")
-                #     return None
-
                 try:
-                    stock = Vnstock().stock(symbol=symbol, source='TCBS')
+                    stock = Vnstock().stock(symbol=symbol, source='VCI')
+                    print(stock)
                 except KeyError:
-                    logger.exception("Lỗi khi lấy dữ liệu chứng khoán TCBS")
+                    logger.exception("Lỗi khi lấy dữ liệu chứng khoán VCI")
                     return None
 
                 # Lấy dữ liệu 60 ngày gần đây để đảm bảo có đủ phiên giao dịch
