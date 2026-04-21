@@ -27,6 +27,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+SOURCE = "KBS"  # KBS, VCI, TCBS, SSI, VNDIRECT,
 
 
 def calculate_ceiling_floor(ref_price):
@@ -87,7 +88,7 @@ async def get_stock_today(symbol: str = "PDR", recent: Optional[int] = None):
         # Hàm lấy dữ liệu phiên hôm nay và phiên gần nhất trước đó
         def get_stock_data():
             try:
-                stock = Vnstock().stock(symbol=symbol, source='KBS')
+                stock = Vnstock().stock(symbol=symbol, source=SOURCE)
 
                 # Lấy dữ liệu 60 ngày gần đây để đảm bảo có đủ phiên giao dịch
                 end_date = datetime.now().strftime('%Y-%m-%d')
@@ -219,7 +220,7 @@ async def get_stock_recent(symbol: str, days: int = 7):
         def get_recent_data():
             try:
                 # Lấy dữ liệu lịch sử
-                stock = Vnstock().stock(symbol=symbol, source='VCI')
+                stock = Vnstock().stock(symbol=symbol, source=SOURCE)
                 history_df = stock.quote.history(
                     start=start_date, end=end_date, interval='1D')
 
@@ -344,7 +345,7 @@ async def get_stock_range(
 
         def get_range_data():
             try:
-                stock = Vnstock().stock(symbol=symbol, source='VCI')
+                stock = Vnstock().stock(symbol=symbol, source=SOURCE)
 
                 # Lấy dữ liệu mở rộng để có thể tính giá tham chiếu
                 extended_start = (datetime.strptime(
