@@ -30,9 +30,7 @@ fi
 echo "📦 [3/5] Cài đặt dependencies..."
 ./$VENV_DIR/bin/pip install -r requirements.txt
 
-echo "🛠️ [4/5] Khởi động lại ứng dụng bằng PM2..."
-pm2 delete citizen-stock || true
-pm2 start ecosystem.config.js
+pm2 restart citizen-stock --update-env || pm2 start ecosystem.config.js
 pm2 save
 
 echo "✅ [5/5] Deploy hoàn tất!"

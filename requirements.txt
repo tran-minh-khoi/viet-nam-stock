@@ -26,4 +26,5 @@ urllib3==2.5.0
 uvicorn==0.35.0
 vnstock==3.5.1
 vnai==2.4.6
+redis==6.0.0
 gunicorn
