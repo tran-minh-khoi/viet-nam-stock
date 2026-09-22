@@ -152,18 +152,31 @@ GET /health
 
 ## Deploying
 
-### Railway (or any Procfile-based platform)
-
-`Procfile`, `requirements.txt`, and `runtime.txt` are already set up — push to GitHub and connect the repo on Railway; it builds and deploys automatically.
-
-### VPS with PM2
+### VPS with PM2 (recommended)
 
 ```bash
+git clone https://github.com/tran-minh-khoi/viet-nam-stock.git
+cd viet-nam-stock
 cp .env.example .env   # fill in APP_MODULE, APP_PORT, etc.
+npm install -g pm2     # if not already installed
 bash deploy.sh
 ```
 
-`deploy.sh` creates a virtualenv, installs dependencies, and starts/restarts the app under PM2 using `ecosystem.config.js` (which runs `start.sh`, a gunicorn + uvicorn-worker server).
+`deploy.sh` creates a virtualenv, installs dependencies, and starts/restarts the app under PM2 using `ecosystem.config.js` (which runs `start.sh`, a gunicorn + uvicorn-worker server). Re-running `bash deploy.sh` after a `git pull` redeploys with zero downtime (`pm2 restart`).
+
+Useful PM2 commands once it's running:
+
+```bash
+pm2 status              # check it's alive
+pm2 logs viet-nam-stock # tail logs
+pm2 restart viet-nam-stock
+```
+
+Put the app behind Nginx (or Caddy) as a reverse proxy to `APP_PORT` if you need a domain/HTTPS in front of it.
+
+### Railway (or any other Procfile-based platform)
+
+`Procfile`, `requirements.txt`, and `runtime.txt` are included for platforms that build from a `Procfile` (Railway, Heroku-style PaaS) — push to GitHub and connect the repo; the platform builds and deploys automatically.
 
 ## Testing
 
