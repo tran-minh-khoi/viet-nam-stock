@@ -14,5 +14,4 @@ if [ -z "$APP_MODULE" ] || [ -z "$APP_PORT" ]; then
 fi
 
 # Chạy gunicorn từ môi trường ảo
-# Tối ưu cho PDR: giảm số worker xuống 2 để giảm overhead khi chỉ cần một mã chứng khoán.
 exec ./"$VENV_DIR"/bin/gunicorn -k uvicorn.workers.UvicornWorker "$APP_MODULE" --workers 2 --bind 0.0.0.0:$APP_PORT

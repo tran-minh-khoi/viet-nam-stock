@@ -1,7 +1,7 @@
 {
-   "name": "pd-citizen-stock",
+   "name": "viet-nam-stock",
    "version": "1.0",
-   "description": "Citizen Stock Services",
+   "description": "Vietnamese stock market data API",
    "scripts": {
       "production": "bash deploy.sh",
       "prod": "yarn production"

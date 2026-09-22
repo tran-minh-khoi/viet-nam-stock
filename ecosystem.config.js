@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "citizen-stock",
+      name: "viet-nam-stock",
       script: "./start.sh",
       interpreter: "/bin/bash",
       kill_timeout: 5000,

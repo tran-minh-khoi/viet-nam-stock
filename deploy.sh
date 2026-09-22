@@ -30,7 +30,7 @@ fi
 echo "📦 [3/5] Cài đặt dependencies..."
 ./$VENV_DIR/bin/pip install -r requirements.txt
 
-pm2 restart citizen-stock --update-env || pm2 start ecosystem.config.js
+pm2 restart viet-nam-stock --update-env || pm2 start ecosystem.config.js
 pm2 save
 
 echo "✅ [5/5] Deploy hoàn tất!"

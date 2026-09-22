@@ -84,7 +84,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -143,10 +143,9 @@ def build_stock_snapshot(symbol: str, history_df: pd.DataFrame, current_price: O
         current_price = float(latest['close'])
 
     upper_price, lower_price = calculate_ceiling_floor(reference_price)
-    stock_name = "PHÁT ĐẠT" if symbol.upper() == "PDR" else symbol.upper()
 
     return {
-        "name": stock_name,
+        "name": symbol.upper(),
         "symbol": symbol.upper(),
         "exchange": "HOSE",
         "currentPrice": round(float(current_price), 2),
@@ -176,7 +175,7 @@ async def health_check():
 
 
 @app.get("/stock/{symbol}")
-async def get_stock_today(symbol: str = "PDR", recent: Optional[int] = None):
+async def get_stock_today(symbol: str, recent: Optional[int] = None):
     """
     Lấy dữ liệu ngày hôm nay của một mã chứng khoán
     Nếu có tham số recent, sẽ lấy dữ liệu của n phiên gần đây
