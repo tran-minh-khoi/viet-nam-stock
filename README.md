@@ -125,8 +125,8 @@ GET /health
 ## Running the API locally
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Setup Python virtual environment and install dependencies
+bash setup.sh
 
 # Run the API
 python api.py
@@ -152,4 +152,4 @@ Portfolio: [tranminhkhoi.dev](https://tranminhkhoi.dev)
 
 ### Support the Project
 If you find this API useful, you can buy me a coffee via PayPal.
-[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/win070802)
+[PayPal link will be added] 
