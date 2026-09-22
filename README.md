@@ -1,5 +1,8 @@
 # Vietnam Stock
 
+[![Tests](https://github.com/tran-minh-khoi/viet-nam-stock/actions/workflows/test.yml/badge.svg)](https://github.com/tran-minh-khoi/viet-nam-stock/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A lightweight FastAPI service that serves real-time and historical Vietnamese stock market data, built on top of [vnstock](https://github.com/thinh-vu/vnstock). Point it at a ticker and get today's price action, recent sessions, or any date range back as JSON.
 
 ## Quick start
@@ -171,7 +174,11 @@ pytest tests/
 
 ## About
 
-Built on [vnstock](https://github.com/thinh-vu/vnstock).
+Built on [vnstock](https://github.com/thinh-vu/vnstock). Contributions welcome — open an issue or a PR.
+
+### License
+
+[MIT](LICENSE)
 
 ### Author
 
