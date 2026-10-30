@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Hỏi đáp, chia sẻ
+    url: https://github.com/tran-minh-khoi/viet-nam-stock/discussions
+    about: Câu hỏi cách dùng, ý tưởng, khoe project của bạn
+  - name: Hỏi về vnstock, tài khoản, hạn mức
+    url: https://vnstocks.com
+    about: Câu hỏi về thư viện vnstock nên hỏi trực tiếp tác giả vnstock
