@@ -1,8 +1,7 @@
 version: 2
+# pip is left out on purpose: vnstock lives on vnstocks.com's own index, which
+# Dependabot can't reach. Bump requirements.txt by hand (vnstock expires yearly).
 updates:
-  - package-ecosystem: pip
-    directory: /
-    schedule: { interval: monthly }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
