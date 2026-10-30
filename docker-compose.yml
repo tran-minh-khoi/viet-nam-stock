@@ -1,0 +1,16 @@
+services:
+  api:
+    build: .
+    image: viet-nam-stock:local
+    container_name: viet-nam-stock
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - vnstock-data:/data
+
+volumes:
+  vnstock-data:
