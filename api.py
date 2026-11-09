@@ -1,20 +1,22 @@
-"""Vietnam Stock API: a small self-hosted REST API over vnstock."""
+"""Vietnam Stock API: a small self-hosted REST API over vnstock 6."""
 import asyncio
 import json
 import logging
-import math
+import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Callable, Dict, Literal, Optional
 
+import re
+
 import pandas as pd
-import vnstock
-from fastapi import FastAPI, HTTPException, Path, Query, Request
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from vnstock import Fundamental, Macro, Market, Reference
 
+import engine
+import sources
 from config import settings
 
 try:
@@ -22,18 +24,27 @@ try:
 except ImportError:  # pragma: no cover
     redis = None
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
+SERVICE_NAME = os.getenv("SERVICE_NAME", "Vietnam Stock API")
 
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("viet-nam-stock")
+# vnstock 6 talks to sources through httpx, which logs every request at INFO
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
-SOURCE = settings.DATA_SOURCE
 Symbol = Path(..., pattern=r"^[A-Za-z0-9]{2,12}$", description="Mã chứng khoán, ví dụ VCB")
 Interval = Literal["1m", "5m", "15m", "30m", "1H", "1D", "1W", "1M"]
-DateStr = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="YYYY-MM-DD")
+def DateStr():
+    # A new Query per parameter: sharing one instance between `start` and `end` made FastAPI
+    # read `start` for both, so ?start=X returned only day X.
+    return Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="YYYY-MM-DD")
+KEY_ENV = {
+    "dnse": "DNSE_API_KEY, DNSE_API_SECRET", "ssi": "SSI_API_KEY, SSI_API_SECRET",
+    "tcbs": "TCBS_API_KEY", "fhsc": "FHSC_API_KEY", "fmp": "FMP_API_KEY",
+}
 
 
-# ---------------------------------------------------------------- cache
+# ---------------------------------------------------------------- cache for the non-engine endpoints
 
 REDIS_CLIENT = None
 if redis is not None and settings.REDIS_URL:
@@ -45,7 +56,6 @@ if redis is not None and settings.REDIS_URL:
         logger.warning("Redis unavailable (%s), using in-memory cache", exc)
         REDIS_CLIENT = None
 
-# ponytail: unbounded dict, fine for a personal watchlist; set REDIS_URL if it grows
 MEMORY_CACHE: Dict[str, tuple] = {}
 _locks: Dict[str, asyncio.Lock] = {}
 
@@ -72,12 +82,18 @@ def write_cache(key: str, value, ttl: int):
             return
         except Exception as exc:
             logger.warning("Redis write failed: %s", exc)
+    if len(MEMORY_CACHE) > 5000:          # crude bound: drop expired entries first, then everything
+        stamp = time.time()
+        for k in [k for k, (exp, _) in MEMORY_CACHE.items() if exp <= stamp]:
+            MEMORY_CACHE.pop(k, None)
+        if len(MEMORY_CACHE) > 5000:
+            MEMORY_CACHE.clear()
     MEMORY_CACHE[key] = (time.time() + ttl, value)
 
 
-async def cached(key: str, ttl: int, fn: Callable):
-    """Return the cached value or run fn in a thread. Concurrent requests for the
-    same key wait for one vnstock call instead of each spending quota."""
+async def cached(key: str, ttl: int, fn: Callable, cost: int = 1):
+    """Cached value, or run fn in a worker thread. Concurrent requests for the same key
+    share one upstream call, and every call is counted against the upstream budget."""
     hit = read_cache(key)
     if hit is not None:
         return hit
@@ -86,7 +102,10 @@ async def cached(key: str, ttl: int, fn: Callable):
         hit = read_cache(key)
         if hit is not None:
             return hit
-        value = await asyncio.to_thread(fn)
+        if not engine.budget.take(cost, False):
+            raise HTTPException(status_code=429, detail="Đã chạm hạn mức gọi nguồn mỗi phút, thử lại sau ít giây",
+                                headers={"Retry-After": "15"})
+        value = await engine.run_upstream(fn)
         write_cache(key, value, ttl)
         return value
 
@@ -94,7 +113,7 @@ async def cached(key: str, ttl: int, fn: Callable):
 # ---------------------------------------------------------------- helpers
 
 def records(df: Optional[pd.DataFrame]) -> list:
-    """DataFrame -> JSON-safe list of dicts (NaN -> null)."""
+    """DataFrame -> JSON-safe list of dicts (NaN -> null, times in Vietnam time)."""
     if df is None or df.empty:
         return []
     df = df.copy()
@@ -104,108 +123,61 @@ def records(df: Optional[pd.DataFrame]) -> list:
     return json.loads(df.to_json(orient="records", date_format="iso", force_ascii=False))
 
 
-def ohlcv_records(df: pd.DataFrame, interval: str) -> list:
-    if df.empty:
+def ohlcv_records(df: Optional[pd.DataFrame], interval: str) -> list:
+    if df is None or df.empty:
         return []
     df = df.copy()
     t = pd.to_datetime(df["time"])
+    if getattr(t.dt, "tz", None) is not None:
+        t = t.dt.tz_convert("Asia/Ho_Chi_Minh")
     df["time"] = t.dt.strftime("%Y-%m-%d") if interval in ("1D", "1W", "1M") else t.map(lambda x: x.isoformat())
     return records(df)
 
 
-def get_history_window(days: int = 7):
-    """(start, end) dates covering at least `days` calendar days back from today."""
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=max(7, days))).strftime('%Y-%m-%d')
-    return start_date, end_date
-
-
-def calculate_ceiling_floor(ref_price):
-    """Giá trần/sàn HOSE (±7%), làm tròn theo bước giá: trần làm tròn xuống, sàn làm tròn lên."""
-    if ref_price < 10:
-        tick_size = 0.01
-    elif ref_price < 50:
-        tick_size = 0.05
-    elif ref_price < 100:
-        tick_size = 0.1
-    elif ref_price < 500:
-        tick_size = 0.5
-    else:
-        tick_size = 1.0
-    ceiling = math.floor(ref_price * 1.07 / tick_size) * tick_size
-    floor = math.ceil(ref_price * 0.93 / tick_size) * tick_size
-    return round(ceiling, 2), round(floor, 2)
-
-
 def daily_sessions(symbol: str, start: str, end: str) -> list:
-    """Daily bars (oldest first) with reference price = previous session's close."""
-    df = Market().equity(symbol).ohlcv(start=start, end=end, interval="1D", source=SOURCE)
-    if df.empty:
-        return []
-    df = df.sort_values("time")
-    df["reference_price"] = df["close"].shift(1).fillna(df["close"])
+    """Daily bars (oldest first) with reference = previous close and the exchange's ceiling/floor."""
+    bars = sources.daily_bars(symbol, start, end)
+    exchange = engine.info_of(symbol)["exchange"]
     out = []
-    for row in df.itertuples():
-        ceiling, floor = calculate_ceiling_floor(float(row.reference_price))
-        out.append({
-            "date": pd.to_datetime(row.time).strftime("%Y-%m-%d"),
-            "open": float(row.open), "close": float(row.close),
-            "high": float(row.high), "low": float(row.low),
-            "volume": int(row.volume),
-            "reference_price": float(row.reference_price),
-            "ceiling": ceiling, "floor": floor,
-        })
+    for i, bar in enumerate(bars):
+        reference = bars[i - 1]["close"] if i > 0 else bar["close"]
+        ceiling, floor = engine.ceiling_floor(exchange, reference)
+        out.append({**bar, "reference_price": reference, "ceiling": ceiling, "floor": floor})
     return out
 
 
-def live_price(symbol: str) -> float:
-    """Last matched price for FAST_SYMBOLS on tiers that allow the trade tape; 0 = unavailable."""
-    if symbol not in settings.FAST_SYMBOLS:
-        return 0.0
-    try:
-        tape = Market().equity(symbol).trades(limit=1)
-        return 0.0 if tape.empty else float(tape["price"].iloc[-1])
-    except Exception as exc:
-        logger.debug("live price unavailable for %s: %s", symbol, exc)
-        return 0.0
+def not_found(what: str):
+    raise HTTPException(status_code=404, detail=f"Không tìm thấy dữ liệu {what}")
 
 
-async def exchange_of(symbol: str) -> Optional[str]:
-    """HOSE / HNX / UPCOM, looked up once a day per symbol."""
-    try:
-        return await cached(f"exchange:{symbol}", settings.CACHE_TTL_REFERENCE,
-                            lambda: (records(Market().equity(symbol).quote()) or [{}])[0].get("exchange"))
-    except Exception:
-        return None
+def cache_headers(response: Response):
+    response.headers["Cache-Control"] = "public, max-age=5"
 
 
 # ---------------------------------------------------------------- app
 
 @asynccontextmanager
 async def lifespan(_app):
-    if settings.VNSTOCK_API_KEY:
-        try:
-            info = await asyncio.to_thread(vnstock.login, settings.VNSTOCK_API_KEY)
-            logger.info("vnstock login OK, tier=%s", info.get("tier"))
-        except Exception as exc:
-            logger.error("vnstock login failed, running as guest: %s", str(exc).splitlines()[0])
-    else:
-        logger.info("No VNSTOCK_API_KEY set, running as guest (10 calls/min)")
+    engine.load_name_overrides(settings.NAMES_FILE)
+    task = asyncio.create_task(engine.background_loop())
+    logger.info("vnstock 6, sources: data=%s quote=%s company=%s index=%s",
+                settings.DATA_SOURCE, settings.QUOTE_SOURCE, settings.COMPANY_SOURCE, settings.INDEX_SOURCE)
     yield
+    task.cancel()
 
 
+docs = {} if settings.ENABLE_DOCS else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 app = FastAPI(
-    title="Vietnam Stock API",
+    title=SERVICE_NAME,
     description=(
-        "API tự host cho dữ liệu chứng khoán Việt Nam, dựa trên [vnstock](https://vnstocks.com).\n\n"
-        "- Giá trong `/stock/*` và `/history`: **nghìn đồng** (57.2 = 57.200đ). "
-        "Giá trong `/quote`, `/quotes`: **đồng**.\n"
-        "- Nhóm **Cần tài khoản vnstock** chỉ chạy khi bạn điền `VNSTOCK_API_KEY` có cấp phù hợp; "
-        "nếu không sẽ trả lỗi 403 kèm lý do.\n"
+        "API tự host cho dữ liệu chứng khoán Việt Nam, dựa trên [vnstock 6](https://vnstocks.com/docs/vnstock/v6).\n\n"
+        "- Mọi giá tính bằng **nghìn đồng** (57.2 = 57.200đ).\n"
+        "- Mỗi nguồn dữ liệu cần khoá riêng do nguồn đó cấp. Thiếu khoá thì endpoint trả 403 kèm tên biến cần đặt.\n"
         "- Không phải tư vấn đầu tư."
     ),
     version=__version__,
     lifespan=lifespan,
+    **docs,
 )
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS,
                    allow_credentials=False, allow_methods=["GET"], allow_headers=["*"])
@@ -213,23 +185,27 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS,
 
 @app.exception_handler(Exception)
 async def vnstock_errors(_request: Request, exc: Exception):
-    """Turn vnstock errors into clear HTTP errors instead of a bare 500."""
+    """vnstock errors -> clear HTTP errors instead of a bare 500."""
     kinds = {c.__name__ for c in type(exc).__mro__}
     msg = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
-    if "EntitlementError" in kinds:
-        if "hạn mức" in msg or "quota" in msg.lower():
-            status, hint = 429, "Đã hết lượt gọi của tài khoản vnstock. Đợi một lúc hoặc dùng VNSTOCK_API_KEY có hạn mức cao hơn."
-        else:
-            status, hint = 403, "Tài khoản vnstock hiện tại chưa có quyền dùng dữ liệu này. Xem GET /status và docs/vnstock-account.md."
-    elif "RateLimitedError" in kinds:
+    source = getattr(exc, "source", None)
+    if not source:
+        found = re.search(r"source=(\w+)", str(exc))
+        source = found.group(1) if found else None
+    if "CredentialError" in kinds:
+        env = KEY_ENV.get(str(source or "").lower(), "<NGUON>_API_KEY")
+        status, hint = 403, f"Chưa có khoá cho nguồn {source or '?'}. Đặt {env} trong .env rồi khởi động lại."
+    elif kinds & {"EntitlementError", "AccessDeniedError", "PolicyError", "DataSourceBlockedError"}:
+        status, hint = 403, "Khoá hiện tại không có quyền dùng dữ liệu này, hoặc nguồn đang tạm dừng. Xem GET /status."
+    elif kinds & {"RateLimitedError", "RateLimitError"}:
         status, hint = 429, "Nguồn dữ liệu đang giới hạn tốc độ, thử lại sau ít phút."
     elif "InputError" in kinds:
-        status, hint = (404, "Kiểm tra lại mã chứng khoán.") if "không có mã" in msg else (400, "Kiểm tra lại tham số.")
+        status, hint = 400, "Kiểm tra lại mã chứng khoán và tham số."
     elif "UnsupportedError" in kinds:
-        status, hint = 400, "Nguồn dữ liệu không hỗ trợ yêu cầu này."
+        status, hint = 400, "Nguồn dữ liệu đang chọn không hỗ trợ yêu cầu này."
     elif "AuthError" in kinds:
-        status, hint = 503, "VNSTOCK_API_KEY không hợp lệ hoặc đã hết hạn."
-    elif kinds & {"NetworkError", "ProviderError", "SchemaError"}:
+        status, hint = 503, "Khoá nguồn không hợp lệ, hết hạn, hoặc phiên cần đăng nhập lại."
+    elif kinds & {"NetworkError", "ProviderError", "SourceError", "SchemaError", "PayloadError", "EnvelopeError", "ClockSkewError"}:
         status, hint = 503, "Nguồn dữ liệu đang lỗi hoặc không truy cập được, thử lại sau."
     else:
         logger.exception("Unhandled error")
@@ -238,86 +214,90 @@ async def vnstock_errors(_request: Request, exc: Exception):
     return JSONResponse(status_code=status, content={"detail": msg, "hint": hint})
 
 
-def not_found(what: str):
-    raise HTTPException(status_code=404, detail=f"Không tìm thấy dữ liệu {what}")
+try:
+    from vnstock.errors import VnstockError
+    app.add_exception_handler(VnstockError, vnstock_errors)   # expected errors: answered without a traceback
+except ImportError:  # pragma: no cover
+    pass
 
 
 # ---------------------------------------------------------------- system
 
 @app.get("/", tags=["Hệ thống"])
 async def root():
-    return {"message": "Vietnam Stock API is running", "version": __version__, "docs": "/docs"}
+    return {"service": SERVICE_NAME, "version": __version__,
+            "endpoints": ["/stock/{symbol}", "/stock/{symbol}/recent?days=7", "/stocks?symbols=PDR,VNM", "/health"],
+            "docs": "/docs" if settings.ENABLE_DOCS else None}
 
 
 @app.get("/health", tags=["Hệ thống"])
-async def health_check():
-    return {"status": "healthy", "service": "stock-api"}
+async def health():
+    return engine.health()
 
 
-@app.get("/status", tags=["Hệ thống"], summary="Cấp tài khoản vnstock và số lượt gọi đã dùng")
+@app.get("/status", tags=["Hệ thống"], summary="Bản vnstock, hạn dùng, nguồn nào đã có khoá")
 async def status():
-    return await cached("status", 10, vnstock.account.usage)
+    def collect():
+        import vnstock
+        account = vnstock.account.status() or {}
+        release = account.get("release") or {}
+        keys = {name: all(os.getenv(v.strip()) for v in env.split(",")) for name, env in KEY_ENV.items()}
+        return {
+            "vnstock": vnstock.__version__,
+            "releaseExpiresAt": release.get("expires_at"),
+            "tier": account.get("tier"),
+            "serverMessage": account.get("server_message"),
+            "serverWarning": account.get("server_warning"),
+            "keys": keys,
+            "sources": {"data": settings.DATA_SOURCE, "quote": settings.QUOTE_SOURCE,
+                        "company": settings.COMPANY_SOURCE, "index": settings.INDEX_SOURCE},
+        }
+
+    data = read_cache("status")
+    if data is None:
+        data = await engine.run_upstream(collect)
+        write_cache("status", data, 60)
+    return {**data, "upstreamCallsLastMinute": engine.budget.used(), "upstreamLimitPerMinute": settings.BUDGET_PER_MINUTE}
 
 
-# ---------------------------------------------------------------- stocks (guest tier)
+# ---------------------------------------------------------------- stocks (engine: these answers never wait on the source once cached)
 
-@app.get("/stock/{symbol}", tags=["Cổ phiếu"], summary="Phiên mới nhất + phiên trước, kèm giá trần/sàn")
-async def get_stock_today(symbol: str = Symbol, recent: Optional[int] = Query(None, ge=1, le=250)):
-    if recent:
-        return await get_stock_recent(symbol, recent)
-    symbol = symbol.upper()
-    start, end = get_history_window(settings.DEFAULT_HISTORY_DAYS)
-    sessions = await cached(f"daily:{symbol}:{start}:{end}", settings.CACHE_TTL,
-                            lambda: daily_sessions(symbol, start, end))
-    if not sessions:
-        not_found(f"cho mã {symbol}")
-    latest = sessions[-1]
-    previous = sessions[-2] if len(sessions) > 1 else latest
-    current = await cached(f"live:{symbol}", settings.CACHE_TTL, lambda: live_price(symbol)) or latest["close"]
-    is_today = latest["date"] == datetime.now().strftime("%Y-%m-%d")
-    now = datetime.now().isoformat()
+@app.get("/stocks", tags=["Cổ phiếu"], summary="Nhiều mã một lượt (tối đa MAX_BATCH)")
+async def get_stocks(response: Response, symbols: str = Query(..., description="Danh sách mã, cách nhau dấu phẩy")):
+    requested = []
+    for raw in symbols.split(","):
+        code = raw.strip().upper()
+        if code and code not in requested:
+            requested.append(code)
+    if not requested or len(requested) > settings.MAX_BATCH:
+        raise HTTPException(status_code=400, detail=f"Cần từ 1 đến {settings.MAX_BATCH} mã")
+
+    async def one(code: str):
+        try:
+            symbol = engine.validate_symbol(code)
+            return code, engine.build_quote(symbol, await engine.get_entry(symbol)), None
+        except HTTPException as exc:
+            return code, None, {"status": exc.status_code, "message": exc.detail}
+
+    results = await asyncio.gather(*(one(code) for code in requested))
+    cache_headers(response)
     return {
-        "symbol": symbol,
-        "name": symbol,
-        "exchange": await exchange_of(symbol),
-        "currentPrice": round(current, 2),
-        "referencePrice": latest["reference_price"],
-        "upperPrice": latest["ceiling"],
-        "lowerPrice": latest["floor"],
-        "todayOpen": latest["open"],
-        "todayHigh": latest["high"],
-        "todayLow": latest["low"],
-        "todayVolume": latest["volume"],
-        "todayDate": latest["date"],
-        "previousClose": previous["close"],
-        "previousVolume": previous["volume"],
-        "previousDate": previous["date"],
-        "lastUpdated": now,
-        "data": {
-            "today": {**{k: latest[k] for k in ("date", "open", "high", "low", "volume")},
-                      "close": round(current, 2), "current_price": round(current, 2),
-                      "reference_price": latest["reference_price"],
-                      "ceiling": latest["ceiling"], "floor": latest["floor"], "is_today": is_today},
-            "previous": {"date": previous["date"], "close": previous["close"], "volume": previous["volume"]},
-        },
-        "timestamp": now,
+        "data": {code: quote for code, quote, error in results if quote},
+        "errors": {code: error for code, quote, error in results if error},
+        "timestamp": engine.now().isoformat(),
     }
 
 
-@app.get("/stock/{symbol}/recent", tags=["Cổ phiếu"], summary="N phiên giao dịch gần nhất")
-async def get_stock_recent(symbol: str = Symbol, days: int = Query(7, ge=1, le=250)):
-    symbol = symbol.upper()
-    # ~2 calendar days per trading session covers weekends and holidays
-    start, end = get_history_window(days * 2 + 7)
-    sessions = await cached(f"daily:{symbol}:{start}:{end}", settings.CACHE_TTL,
-                            lambda: daily_sessions(symbol, start, end))
-    today = datetime.now().strftime("%Y-%m-%d")
-    data = [{**s, "is_today": s["date"] == today} for s in sessions[-days:]]
-    if not data:
-        not_found(f"cho mã {symbol} trong {days} phiên gần đây")
-    return {"symbol": symbol, "days": days, "actual_sessions": len(data),
-            "sessions": data, "timestamp": datetime.now().isoformat()}
+@app.get("/stock/{symbol}/recent", tags=["Cổ phiếu"], summary="N phiên gần nhất (tối đa MAX_RECENT)")
+async def get_stock_recent(symbol: str, response: Response, days: int = 7):
+    days = min(max(days, 1), settings.MAX_RECENT)
+    code = engine.validate_symbol(symbol)
+    entry = await engine.get_entry(code)
+    cache_headers(response)
+    return engine.build_recent(code, entry, days)
 
+
+# ---------------------------------------------------------------- stocks (direct, cached)
 
 @app.get("/stock/{symbol}/day-range", tags=["Cổ phiếu"], summary="Các phiên trong khoảng ngày, kèm giá tham chiếu/trần/sàn")
 async def get_stock_range(symbol: str = Symbol,
@@ -337,60 +317,125 @@ async def get_stock_range(symbol: str = Symbol,
     if not data:
         not_found(f"cho mã {symbol} từ {start_date} đến {end_date}")
     return {"symbol": symbol, "start_date": start_date, "end_date": end_date,
-            "total_sessions": len(data), "sessions": data, "timestamp": datetime.now().isoformat()}
+            "total_sessions": len(data), "sessions": data, "timestamp": engine.now().isoformat()}
 
 
 def _ohlcv_ttl(interval: str, end: Optional[str]) -> int:
     # Closed daily+ windows don't change; anything touching today does
-    past = end is not None and end < datetime.now().strftime("%Y-%m-%d")
+    past = end is not None and end < engine.now().strftime("%Y-%m-%d")
     return settings.CACHE_TTL_HISTORY if past or interval in ("1W", "1M") else settings.CACHE_TTL
 
 
 @app.get("/stock/{symbol}/history", tags=["Cổ phiếu"], summary="Nến OHLCV theo khung thời gian (1m → 1M)")
-async def stock_history(symbol: str = Symbol, start: Optional[str] = DateStr, end: Optional[str] = DateStr,
+async def stock_history(symbol: str = Symbol, start: Optional[str] = DateStr(), end: Optional[str] = DateStr(),
                         interval: Interval = "1D",
                         limit: Optional[int] = Query(None, ge=1, le=1000, description="Số nến mới nhất (khi không truyền start)")):
     symbol = symbol.upper()
-    data = await cached(f"ohlcv:{symbol}:{start}:{end}:{interval}:{limit}", _ohlcv_ttl(interval, end), lambda: ohlcv_records(
-        Market().equity(symbol).ohlcv(start=start, end=end, interval=interval, limit=limit, source=SOURCE), interval))
+    data = await cached(f"ohlcv:{symbol}:{start}:{end}:{interval}:{limit}", _ohlcv_ttl(interval, end),
+                        lambda: ohlcv_records(sources.ohlcv("equity", symbol, start, end, interval, limit), interval))
     return {"symbol": symbol, "interval": interval, "count": len(data), "data": data}
 
 
-@app.get("/stock/{symbol}/quote", tags=["Cổ phiếu"], summary="Bảng giá: tham chiếu, trần, sàn, 3 bước giá mua/bán (đồng)")
+def _dnse_quote(symbol: str) -> Optional[dict]:
+    """Price board row built from DNSE: official reference/ceiling/floor (main board G1) + 3 bid/ask levels."""
+    limits = records(sources.price_limits(symbol))
+    row = next((r for r in limits if r.get("board") == "G1"), limits[0] if limits else None)
+    book = records(sources.order_book(symbol))
+    if row is None and not book:
+        return None
+    out = {"symbol": symbol}
+    if row:
+        out.update({"exchange": sources.normalize_exchange(row.get("exchange")) or row.get("exchange"),
+                    "trading_date": row.get("trading_date"),
+                    "reference_price": row.get("reference_price"),
+                    "ceiling_price": row.get("ceiling_price"), "floor_price": row.get("floor_price")})
+    if book:
+        out.update(book[0])
+    return out
+
+
+@app.get("/stock/{symbol}/quote", tags=["Cổ phiếu"], summary="Bảng giá: tham chiếu, trần, sàn, 3 bước giá mua/bán")
 async def stock_quote(symbol: str = Symbol):
     symbol = symbol.upper()
-    data = await cached(f"quote:{symbol}", settings.CACHE_TTL, lambda: records(Market().equity(symbol).quote()))
+    if settings.QUOTE_SOURCE == "dnse":
+        data = await cached(f"quote:{symbol}", settings.CACHE_TTL, lambda: _dnse_quote(symbol), cost=2)
+    else:
+        data = await cached(f"quote:{symbol}", settings.CACHE_TTL,
+                            lambda: (records(sources.board([symbol])) or [None])[0])
     if not data:
         not_found(f"bảng giá cho mã {symbol}")
-    return data[0]
+    return data
 
 
-@app.get("/quotes", tags=["Cổ phiếu"], summary="Bảng giá nhiều mã trong 1 lượt gọi (tiết kiệm hạn mức)")
+@app.get("/quotes", tags=["Cổ phiếu"], summary="Bảng giá nhiều mã")
 async def quotes(symbols: str = Query(..., pattern=r"^[A-Za-z0-9]{2,12}(,[A-Za-z0-9]{2,12}){0,49}$",
-                                      description="Tối đa 50 mã, cách nhau bằng dấu phẩy: VCB,FPT,HPG")):
+                                      description="Tối đa 50 mã (10 mã với nguồn dnse), cách nhau bằng dấu phẩy")):
     syms = sorted({s.upper() for s in symbols.split(",")})
-    data = await cached(f"quotes:{','.join(syms)}", settings.CACHE_TTL, lambda: records(Market().quote(syms)))
+    if settings.QUOTE_SOURCE == "dnse":
+        if len(syms) > settings.MAX_BATCH:
+            raise HTTPException(status_code=400, detail=f"Nguồn dnse: tối đa {settings.MAX_BATCH} mã mỗi lượt")
+        rows = [await stock_quote(s) for s in syms]
+        return {"count": len(rows), "data": rows}
+    data = await cached(f"quotes:{','.join(syms)}", settings.CACHE_TTL, lambda: records(sources.board(syms)))
     return {"count": len(data), "data": data}
 
 
-@app.get("/stock/{symbol}/company", tags=["Cổ phiếu"], summary="Thông tin doanh nghiệp")
+@app.get("/stock/{symbol}/trades", tags=["Cổ phiếu"], summary="Lệnh khớp trong phiên (tick-by-tick)")
+async def trades(symbol: str = Symbol, limit: int = Query(100, ge=1, le=1000)):
+    symbol = symbol.upper()
+    data = await cached(f"trades:{symbol}:{limit}", settings.CACHE_TTL, lambda: records(sources.trades(symbol, limit)))
+    return {"symbol": symbol, "count": len(data), "data": data}
+
+
+@app.get("/stock/{symbol}/foreign-flow", tags=["Cổ phiếu"], summary="Giao dịch khối ngoại theo ngày")
+async def foreign_flow(symbol: str = Symbol, start: Optional[str] = DateStr(), end: Optional[str] = DateStr()):
+    symbol = symbol.upper()
+    data = await cached(f"foreign:{symbol}:{start}:{end}", settings.CACHE_TTL_HISTORY,
+                        lambda: records(sources.foreign_flow(symbol, start, end)))
+    return {"symbol": symbol, "count": len(data), "data": data}
+
+
+# ---------------------------------------------------------------- company (COMPANY_SOURCE, fhsc)
+
+CompanySection = Literal["shareholders", "ownership", "insider_trading", "events"]
+FinancialReport = Literal["income_statement", "balance_sheet", "cash_flow"]
+
+
+@app.get("/stock/{symbol}/company", tags=["Doanh nghiệp"], summary="Hồ sơ doanh nghiệp")
 async def company_info(symbol: str = Symbol):
     symbol = symbol.upper()
     data = await cached(f"company:{symbol}", settings.CACHE_TTL_REFERENCE,
-                        lambda: records(Reference().company(symbol).info()))
+                        lambda: records(sources.company(symbol, "info")))
     if not data:
         not_found(f"doanh nghiệp cho mã {symbol}")
     return data[0]
 
 
-# ---------------------------------------------------------------- indices & lists (guest tier)
+@app.get("/stock/{symbol}/company/{section}", tags=["Doanh nghiệp"], summary="Cổ đông lớn, cơ cấu sở hữu, giao dịch nội bộ, sự kiện")
+async def company_section(section: CompanySection, symbol: str = Symbol):
+    symbol = symbol.upper()
+    data = await cached(f"company:{symbol}:{section}", settings.CACHE_TTL_REFERENCE,
+                        lambda: records(sources.company(symbol, section)))
+    return {"symbol": symbol, "section": section, "count": len(data), "data": data}
+
+
+@app.get("/stock/{symbol}/financials/{report}", tags=["Doanh nghiệp"], summary="Báo cáo tài chính")
+async def financials(report: FinancialReport, symbol: str = Symbol,
+                     period: Literal["quarter", "year"] = "quarter"):
+    symbol = symbol.upper()
+    data = await cached(f"fin:{symbol}:{report}:{period}", settings.CACHE_TTL_REFERENCE,
+                        lambda: records(sources.financial(symbol, report, period)))
+    return {"symbol": symbol, "report": report, "period": period, "count": len(data), "data": data}
+
+
+# ---------------------------------------------------------------- indices & lists
 
 @app.get("/index/{symbol}/history", tags=["Chỉ số"], summary="Nến OHLCV của chỉ số (VNINDEX, VN30, HNXINDEX...)")
-async def index_history(symbol: str = Symbol, start: Optional[str] = DateStr, end: Optional[str] = DateStr,
+async def index_history(symbol: str = Symbol, start: Optional[str] = DateStr(), end: Optional[str] = DateStr(),
                         interval: Interval = "1D", limit: Optional[int] = Query(None, ge=1, le=1000)):
     symbol = symbol.upper()
-    data = await cached(f"index:{symbol}:{start}:{end}:{interval}:{limit}", _ohlcv_ttl(interval, end), lambda: ohlcv_records(
-        Market().index(symbol).ohlcv(start=start, end=end, interval=interval, limit=limit), interval))
+    data = await cached(f"index:{symbol}:{start}:{end}:{interval}:{limit}", _ohlcv_ttl(interval, end),
+                        lambda: ohlcv_records(sources.ohlcv("index", symbol, start, end, interval, limit), interval))
     return {"symbol": symbol, "interval": interval, "count": len(data), "data": data}
 
 
@@ -398,19 +443,19 @@ async def index_history(symbol: str = Symbol, start: Optional[str] = DateStr, en
 async def index_members(symbol: str = Symbol):
     symbol = symbol.upper()
     data = await cached(f"members:{symbol}", settings.CACHE_TTL_REFERENCE,
-                        lambda: [r["symbol"] for r in records(Reference().index(symbol).members())])
+                        lambda: [r["symbol"] for r in records(sources.index_members(symbol))])
     return {"index": symbol, "count": len(data), "symbols": data}
 
 
 @app.get("/indices", tags=["Danh mục"], summary="Danh sách các chỉ số")
 async def indices():
-    data = await cached("indices", settings.CACHE_TTL_REFERENCE, lambda: records(Reference().index.list()))
+    data = await cached("indices", settings.CACHE_TTL_REFERENCE, lambda: records(sources.index_list()))
     return {"count": len(data), "data": data}
 
 
 @app.get("/symbols", tags=["Danh mục"], summary="Toàn bộ mã cổ phiếu niêm yết")
 async def symbols():
-    data = await cached("symbols", settings.CACHE_TTL_REFERENCE, lambda: records(Reference().equity.list()))
+    data = await cached("symbols", settings.CACHE_TTL_REFERENCE, lambda: records(sources.symbols()))
     return {"count": len(data), "data": data}
 
 
@@ -418,64 +463,19 @@ async def symbols():
 async def group_symbols(group: str = Path(..., pattern=r"^[A-Za-z0-9]{2,20}$")):
     group = group.upper()
     data = await cached(f"group:{group}", settings.CACHE_TTL_REFERENCE,
-                        lambda: [r["symbol"] for r in records(Reference().equity.by_group(group))])
+                        lambda: [r["symbol"] for r in records(sources.group_members(group))])
     return {"group": group, "count": len(data), "symbols": data}
 
 
-# ---------------------------------------------------------------- registered tiers
-
-FinancialReport = Literal["income_statement", "balance_sheet", "cash_flow", "ratio"]
-CompanySection = Literal["shareholders", "officers", "subsidiaries", "events"]
-MACRO = {
-    "gdp": ("economy", "gdp"), "cpi": ("economy", "cpi"), "fdi": ("economy", "fdi"),
-    "import-export": ("economy", "import_export"), "credit": ("economy", "credit"),
-    "money-supply": ("economy", "money_supply"), "exchange-rate": ("currency", "exchange_rate"),
-    "interbank-rate": ("currency", "interbank_rate"), "deposit-rate": ("currency", "deposit_rate"),
-    "policy-rate": ("currency", "policy_rate"),
-}
-MacroIndicator = Literal[tuple(MACRO)]
-PAID = "Cần tài khoản vnstock"
-
-
-@app.get("/stock/{symbol}/financials/{report}", tags=[PAID], summary="Báo cáo tài chính / chỉ số tài chính")
-async def financials(report: FinancialReport, symbol: str = Symbol,
-                     period: Literal["quarter", "year"] = "quarter"):
-    symbol = symbol.upper()
-    data = await cached(f"fin:{symbol}:{report}:{period}", settings.CACHE_TTL_REFERENCE,
-                        lambda: records(getattr(Fundamental().equity(symbol), report)(period=period)))
-    return {"symbol": symbol, "report": report, "period": period, "count": len(data), "data": data}
-
-
-@app.get("/stock/{symbol}/company/{section}", tags=[PAID], summary="Cổ đông, ban lãnh đạo, công ty con, sự kiện")
-async def company_section(section: CompanySection, symbol: str = Symbol):
-    symbol = symbol.upper()
-    data = await cached(f"company:{symbol}:{section}", settings.CACHE_TTL_REFERENCE,
-                        lambda: records(getattr(Reference().company(symbol), section)()))
-    return {"symbol": symbol, "section": section, "count": len(data), "data": data}
-
-
-@app.get("/stock/{symbol}/trades", tags=[PAID], summary="Lệnh khớp trong phiên (tick-by-tick)")
-async def trades(symbol: str = Symbol, limit: int = Query(100, ge=1, le=1000)):
-    symbol = symbol.upper()
-    data = await cached(f"trades:{symbol}:{limit}", settings.CACHE_TTL,
-                        lambda: records(Market().equity(symbol).trades(limit=limit)))
-    return {"symbol": symbol, "count": len(data), "data": data}
-
-
-@app.get("/stock/{symbol}/foreign-flow", tags=[PAID], summary="Giao dịch khối ngoại")
-async def foreign_flow(symbol: str = Symbol, start: Optional[str] = DateStr, end: Optional[str] = DateStr):
-    symbol = symbol.upper()
-    data = await cached(f"foreign:{symbol}:{start}:{end}", settings.CACHE_TTL_HISTORY,
-                        lambda: records(Market().equity(symbol).foreign_flow(start=start, end=end)))
-    return {"symbol": symbol, "count": len(data), "data": data}
-
-
-@app.get("/macro/{indicator}", tags=[PAID], summary="Vĩ mô: GDP, CPI, FDI, tỷ giá, lãi suất...")
-async def macro(indicator: MacroIndicator, start: Optional[str] = DateStr, end: Optional[str] = DateStr):
-    group, method = MACRO[indicator]
-    data = await cached(f"macro:{indicator}:{start}:{end}", settings.CACHE_TTL_REFERENCE,
-                        lambda: records(getattr(getattr(Macro(), group)(), method)(start=start, end=end)))
-    return {"indicator": indicator, "count": len(data), "data": data}
+# Registered last so the more specific /stock/{symbol}/... routes above win
+@app.get("/stock/{symbol}", tags=["Cổ phiếu"], summary="Phiên mới nhất + phiên trước, giá hiện tại, trần/sàn")
+async def get_stock(symbol: str, response: Response, recent: Optional[int] = None):
+    code = engine.validate_symbol(symbol)
+    entry = await engine.get_entry(code)
+    cache_headers(response)
+    if recent:
+        return engine.build_recent(code, entry, min(max(recent, 1), settings.MAX_RECENT))
+    return engine.build_quote(code, entry)
 
 
 if __name__ == "__main__":

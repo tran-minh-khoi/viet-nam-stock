@@ -1,7 +1,8 @@
-# vnstock 5 is published on its own package index, not PyPI
+# vnstock 6 is published on its own package index, not PyPI
 --extra-index-url https://vnstocks.com/api/packages
-vnstock==5.2.1
+vnstock==6.0.0rc5
+vnstock-oapi==0.1.0rc4
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
-pandas==2.3.1
+pandas==2.3.3
 redis==6.0.0

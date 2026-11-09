@@ -2,6 +2,29 @@
 
 Định dạng theo [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/), đánh số phiên bản theo [SemVer](https://semver.org/lang/vi/).
 
+## [4.0.0] - 2026-11-09
+
+### Thay đổi lớn
+- Chuyển sang **vnstock 6** (6.0.0rc5). vnstock 5 và các thế hệ trước ngừng hoạt động từ 10/11/2026.
+- Không còn tài khoản Khách hay nguồn dùng chung: mỗi nguồn (DNSE, SSI, FHSC, TCBS) cần **khoá Open API do chính nguồn đó cấp**. Bỏ `VNSTOCK_API_KEY`; thêm `DNSE_API_KEY`, `DNSE_API_SECRET`, `SSI_API_KEY`, `SSI_API_SECRET`, `FHSC_API_KEY`. Xem [docs/data-sources.md](docs/data-sources.md).
+- Chọn nguồn theo nhóm dữ liệu: `DATA_SOURCE` (mặc định `dnse`), `QUOTE_SOURCE` (`dnse`), `COMPANY_SOURCE` (`fhsc`), `INDEX_SOURCE` (`ssi`). Bỏ nguồn `KBS`, `VCI`.
+- `/stock/{symbol}`, `/stock/{symbol}/recent`, `/stocks` chạy trên engine mới (`engine.py`): giữ dữ liệu từng mã trong bộ nhớ, hết hạn vẫn trả ngay rồi làm mới ở nền, mã ưu tiên tự làm mới, trần lượt gọi nguồn mỗi phút. Kết quả giữ đúng định dạng đang được app dùng thật, kiểm bằng `tests/test_contract.py`.
+- `/stock/{symbol}` thêm `fullName`, `nameEn`, `change`, `changePercent`, `marketOpen`, `stale`; `currentPrice` lấy từ lệnh khớp mới nhất trong giờ giao dịch cho mọi mã. Giá trần/sàn tính theo sàn của mã (HOSE ±7%, HNX ±10%, UPCOM ±15%). `?recent` và `/recent?days` tối đa `MAX_RECENT` (30) phiên.
+- **Mọi giá tính bằng nghìn đồng**, kể cả `/quote`, `/quotes`.
+- Bỏ `FAST_SYMBOLS` (giờ mọi mã đều lấy giá khớp), thêm `PRIORITY_SYMBOLS`, `SHORT_NAMES`, `NAMES_FILE`, `BUDGET_PER_MINUTE`, `BUDGET_RESERVED_FOR_PRIORITY`, `MAX_RECENT`, `MAX_BATCH`, `ENABLE_DOCS`, `SERVICE_NAME`.
+- `/health` trả trạng thái engine (`status: "ok"`, số mã đang giữ, lượt gọi trong phút...). `/status` trả bản vnstock, hạn dùng, nguồn nào đã có khoá.
+
+### Thêm
+- `GET /stocks?symbols=A,B,C`: như `/stock/{symbol}` cho tối đa 10 mã, mã lỗi nằm trong `errors`.
+- `/stock/{symbol}/quote` với nguồn `dnse`: giá tham chiếu/trần/sàn chính thức của sở + 3 bước giá mua/bán.
+- `/stock/{symbol}/company/{section}`: thêm `ownership`, `insider_trading`.
+- `scripts/compare_live.py`: so từng trường giữa hai bản đang chạy, dùng khi chuyển đổi.
+
+### Bỏ (vnstock 6 chưa có nguồn cho dữ liệu này)
+- `/macro/*` (GDP, CPI, FDI, tỷ giá, lãi suất...).
+- `/stock/{symbol}/company/officers`, `/company/subsidiaries`.
+- `/stock/{symbol}/financials/ratio`.
+
 ## [3.0.0] - 2026-10-30
 
 ### Thay đổi lớn
@@ -16,7 +39,7 @@
 - API cho tài khoản có cấp phù hợp: báo cáo tài chính, cổ đông, ban lãnh đạo, công ty con, sự kiện, lệnh khớp, khối ngoại, vĩ mô.
 - Báo lỗi rõ ràng: 403 khi chưa đủ quyền, 429 khi hết lượt, 404 khi sai mã, 503 khi nguồn lỗi, kèm `hint` tiếng Việt.
 - Cache theo loại dữ liệu (`CACHE_TTL`, `CACHE_TTL_HISTORY`, `CACHE_TTL_REFERENCE`). Các request trùng nhau dùng chung một lượt gọi.
-- Tài liệu: README cho người mới, `docs/API.md`, `docs/vnstock-account.md`, `docs/deploy.md`, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT.
+- Tài liệu: README cho người mới, `docs/API.md`, `docs/data-sources.md`, `docs/deploy.md`, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT.
 
 ### Sửa
 - `/stock/{symbol}` trước giờ mở cửa trả cùng một phiên cho cả `today` lẫn `previous`. Giờ `today` là phiên mới nhất, `previous` là phiên liền trước.

@@ -3,21 +3,26 @@
 Địa chỉ gốc khi chạy trên máy: `http://localhost:8000`. Trang thử trực tiếp: `http://localhost:8000/docs`. File OpenAPI: `/openapi.json`, nhập được vào Postman hoặc Insomnia.
 
 **Quy ước chung**
-- Mã chứng khoán không phân biệt hoa thường (`vcb` = `VCB`), dài 2–12 ký tự gồm chữ và số.
-- Ngày có dạng `YYYY-MM-DD`.
-- Giá ở `/stock/*` và `/index/*` tính bằng **nghìn đồng**. Giá ở `/quote` và `/quotes` tính bằng **đồng**.
+- Mã chứng khoán không phân biệt hoa thường (`pdr` = `PDR`).
+- Ngày có dạng `YYYY-MM-DD`. Giờ theo múi giờ Việt Nam.
+- **Mọi giá tính bằng nghìn đồng** (11.6 = 11.600đ). Khối lượng tính bằng cổ phiếu. Giá trị giao dịch (`*_val`) tính bằng đồng.
 - Mọi API chỉ dùng `GET`. Không cần đăng nhập.
 - Trường không có dữ liệu trả về `null`.
+- Cột "Nguồn" cho biết khoá cần có. Thiếu khoá thì API đó trả **403** kèm tên biến cần đặt, xem [data-sources.md](data-sources.md).
 
-**Mục lục:** [Cổ phiếu](#cổ-phiếu) · [Chỉ số](#chỉ-số) · [Danh mục](#danh-mục) · [Cần tài khoản vnstock](#cần-tài-khoản-vnstock) · [Hệ thống](#hệ-thống) · [Mã lỗi](#mã-lỗi) · [Cache](#cache)
+Ví dụ trong tài liệu này là kết quả thật của mã PDR ngày 09/11/2026, nguồn DNSE.
+
+**Mục lục:** [Cổ phiếu](#cổ-phiếu) · [Bảng giá và giao dịch](#bảng-giá-và-giao-dịch) · [Chỉ số và danh mục](#chỉ-số-và-danh-mục) · [Doanh nghiệp](#doanh-nghiệp) · [Hệ thống](#hệ-thống) · [Mã lỗi](#mã-lỗi) · [Cache và hạn mức](#cache-và-hạn-mức)
 
 ---
 
 ## Cổ phiếu
 
-### `GET /stock/{symbol}`
+`/stock/{symbol}`, `/stock/{symbol}/recent` và `/stocks` chạy trên engine giữ dữ liệu trong bộ nhớ: khi một mã đã được hỏi, các lần sau trả ngay (vài mili giây), dữ liệu cũ được làm mới ở nền. Mã phải có trong danh mục niêm yết, mã lạ trả 404 mà không tốn lượt gọi nguồn.
 
-Phiên giao dịch mới nhất và phiên liền trước, kèm giá tham chiếu, trần và sàn.
+### `GET /stock/{symbol}` · DNSE
+
+Phiên mới nhất, phiên liền trước, giá hiện tại, giá tham chiếu/trần/sàn.
 
 | Tham số | Kiểu | Mô tả |
 |---|---|---|
@@ -25,205 +30,278 @@ Phiên giao dịch mới nhất và phiên liền trước, kèm giá tham chi�
 
 ```json
 {
-  "symbol": "VCB",
-  "name": "VCB",
+  "symbol": "PDR",
+  "name": "PHÁT ĐẠT",
+  "fullName": "CTCP Phát triển Bất động sản Phát Đạt",
+  "nameEn": "Phat Dat Real Estate Development Corporation",
   "exchange": "HOSE",
-  "currentPrice": 57.2,
-  "referencePrice": 57.5,
-  "upperPrice": 61.5,
-  "lowerPrice": 53.5,
-  "todayOpen": 57.9,
-  "todayHigh": 58.4,
-  "todayLow": 57.0,
-  "todayVolume": 4049800,
-  "todayDate": "2026-10-29",
-  "previousClose": 57.5,
-  "previousVolume": 6453700,
-  "previousDate": "2026-10-28",
-  "lastUpdated": "2026-10-30T08:20:00.000000",
+  "currentPrice": 11.6,
+  "referencePrice": 11.75,
+  "upperPrice": 12.55,
+  "lowerPrice": 10.95,
+  "change": -0.15,
+  "changePercent": -1.28,
+  "todayOpen": 11.75, "todayHigh": 11.9, "todayLow": 11.45,
+  "todayVolume": 5237000,
+  "todayDate": "2026-11-09",
+  "previousClose": 11.75,
+  "previousVolume": 7325400,
+  "previousDate": "2026-11-06",
+  "lastUpdated": "2026-11-09T16:27:27.737871",
   "data": {
-    "today": { "date": "2026-10-29", "open": 57.9, "close": 57.2, "high": 58.4, "low": 57.0,
-               "volume": 4049800, "current_price": 57.2, "reference_price": 57.5,
-               "ceiling": 61.5, "floor": 53.5, "is_today": false },
-    "previous": { "date": "2026-10-28", "close": 57.5, "volume": 6453700 }
+    "today": { "date": "2026-11-09", "open": 11.75, "close": 11.6, "high": 11.9, "low": 11.45,
+               "volume": 5237000, "current_price": 11.6, "reference_price": 11.75,
+               "ceiling": 12.55, "floor": 10.95, "is_today": true },
+    "previous": { "date": "2026-11-06", "close": 11.75, "volume": 7325400 }
   },
-  "timestamp": "2026-10-30T08:20:00.000000"
+  "marketOpen": false,
+  "stale": false,
+  "timestamp": "2026-11-09T16:28:13.891752"
 }
 ```
 
-- `today*` là **phiên giao dịch mới nhất**. Trước giờ mở cửa hoặc vào ngày nghỉ, đó là phiên gần nhất trước đó. Khi đó `data.today.is_today` là `false`.
-- `upperPrice`/`lowerPrice` tính từ giá đóng cửa phiên trước, theo biên độ ±7% và bước giá của HOSE. Với mã sàn HNX (±10%) hoặc UPCOM (±15%), lấy giá trần/sàn chính xác ở `/stock/{symbol}/quote`.
-- `currentPrice` là giá đóng cửa của phiên mới nhất. Nếu mã nằm trong `FAST_SYMBOLS` và tài khoản có quyền xem lệnh khớp, đây là giá khớp mới nhất.
+- `today*` là **phiên mới nhất**. Trước giờ mở cửa hoặc ngày nghỉ, đó là phiên gần nhất trước đó và `data.today.is_today` là `false`.
+- `currentPrice`: trong giờ giao dịch (8:45–15:05, thứ 2–6) là giá khớp gần nhất (nến 1 phút cuối, nếu chưa quá 10 phút); ngoài giờ là giá đóng cửa phiên mới nhất.
+- `referencePrice` là giá đóng cửa phiên trước. `upperPrice`/`lowerPrice` tính theo sàn của mã: HOSE ±7%, HNX ±10%, UPCOM ±15%, làm tròn vào trong theo bước giá. Giá trần/sàn chính thức của sở: `/stock/{symbol}/quote`.
+- `name` có thể là tên ngắn đặt bằng `SHORT_NAMES`; `fullName` luôn là tên niêm yết.
+- `lastUpdated`: lúc API lấy dữ liệu từ nguồn. `stale: true` nghĩa là lần làm mới gần nhất đã lâu (nguồn đang lỗi), dữ liệu vẫn là bản tốt gần nhất.
 
-### `GET /stock/{symbol}/recent`
+### `GET /stock/{symbol}/recent` · DNSE
 
-N phiên gần nhất, cũ trước mới sau.
+N phiên gần nhất, cũ trước mới sau. Phiên cuối có thêm `current_price`.
 
 | Tham số | Kiểu | Mặc định | Mô tả |
 |---|---|---|---|
-| `days` | 1–250 | 7 | Số phiên |
+| `days` | số | 7 | Số phiên, tối đa `MAX_RECENT` (30). Ngoài khoảng thì tự kẹp về 1–30 |
 
 ```json
 {
-  "symbol": "VCB", "days": 3, "actual_sessions": 3,
+  "symbol": "PDR", "name": "PHÁT ĐẠT", "exchange": "HOSE",
+  "days": 2, "actual_sessions": 2,
   "sessions": [
-    { "date": "2026-10-27", "open": 56.1, "close": 56.1, "high": 56.4, "low": 56.0, "volume": 2438200,
-      "reference_price": 56.1, "ceiling": 60.0, "floor": 52.2, "is_today": false }
+    { "date": "2026-11-06", "open": 11.3, "close": 11.75, "high": 11.9, "low": 11.25, "volume": 7325400,
+      "reference_price": 11.55, "ceiling": 12.35, "floor": 10.75, "is_today": false },
+    { "date": "2026-11-09", "open": 11.75, "close": 11.6, "high": 11.9, "low": 11.45, "volume": 5237000,
+      "reference_price": 11.75, "ceiling": 12.55, "floor": 10.95, "is_today": true, "current_price": 11.6 }
   ],
-  "timestamp": "..."
+  "lastUpdated": "2026-11-09T16:27:27.737871",
+  "timestamp": "2026-11-09T16:28:13.902257"
 }
 ```
 
-### `GET /stock/{symbol}/day-range`
+### `GET /stocks?symbols=PDR,VNM` · DNSE
 
-Các phiên trong một khoảng ngày, cùng định dạng với `recent` nhưng không có `is_today`.
+Như `/stock/{symbol}` cho tối đa `MAX_BATCH` (10) mã một lượt. Mã trùng chỉ tính một lần. Mã lỗi không làm hỏng cả lượt mà nằm trong `errors`:
+
+```json
+{
+  "data": { "PDR": { "symbol": "PDR", "currentPrice": 11.6, "...": "như /stock/PDR" } },
+  "errors": { "XXXX": { "status": 404, "message": "Không tìm thấy mã XXXX" } },
+  "timestamp": "2026-11-09T16:28:13.912235"
+}
+```
+
+### `GET /stock/{symbol}/day-range` · DNSE
+
+Các phiên trong một khoảng ngày, kèm giá tham chiếu/trần/sàn của từng phiên.
 
 | Tham số | Bắt buộc | Mô tả |
 |---|---|---|
 | `start_date` | ✅ | Ngày bắt đầu |
 | `end_date` | ✅ | Ngày kết thúc |
 
-Tài khoản Khách chỉ xem được lịch sử 365 ngày gần nhất.
+```json
+{
+  "symbol": "PDR", "start_date": "2026-11-06", "end_date": "2026-11-09", "total_sessions": 2,
+  "sessions": [
+    { "date": "2026-11-06", "open": 11.3, "high": 11.9, "low": 11.25, "close": 11.75, "volume": 7325400,
+      "reference_price": 11.55, "ceiling": 12.35, "floor": 10.75 }
+  ],
+  "timestamp": "2026-11-09T16:28:29.583094"
+}
+```
 
-### `GET /stock/{symbol}/history`
+### `GET /stock/{symbol}/history` · DNSE
 
 Nến OHLCV thô theo khung thời gian, phù hợp để vẽ biểu đồ.
 
 | Tham số | Mặc định | Mô tả |
 |---|---|---|
 | `interval` | `1D` | `1m`, `5m`, `15m`, `30m`, `1H`, `1D`, `1W`, `1M` |
-| `start`, `end` | | Khoảng ngày. Không truyền thì lấy các nến mới nhất |
-| `limit` | 100 | Số nến mới nhất (1–1000), dùng khi không truyền `start` |
+| `start`, `end` | | Khoảng ngày. Chỉ có `start` thì lấy đến hôm nay |
+| `limit` | | Số nến mới nhất (1–1000), dùng khi không truyền `start` |
 
 ```json
 {
-  "symbol": "FPT", "interval": "1H", "count": 2,
+  "symbol": "PDR", "interval": "1H", "count": 2,
   "data": [
-    { "time": "2026-10-29T13:00:00+07:00", "open": 52.5, "high": 52.9, "low": 52.5, "close": 52.7, "volume": 2025900 },
-    { "time": "2026-10-29T14:00:00+07:00", "open": 52.7, "high": 53.3, "low": 52.5, "close": 52.7, "volume": 2632400 }
+    { "time": "2026-11-09T13:00:00+07:00", "open": 11.7, "high": 11.7, "low": 11.45, "close": 11.55, "volume": 1702300 },
+    { "time": "2026-11-09T14:00:00+07:00", "open": 11.55, "high": 11.6, "low": 11.45, "close": 11.6, "volume": 1423600 }
   ]
 }
 ```
 
-Khung `1D`/`1W`/`1M` có `time` dạng `YYYY-MM-DD`. Khung trong ngày có `time` dạng ISO kèm múi giờ `+07:00`.
+Khung `1D`/`1W`/`1M` có `time` dạng `YYYY-MM-DD` (`1W` là ngày đầu tuần). Khung trong ngày có `time` dạng ISO kèm `+07:00`.
 
-### `GET /stock/{symbol}/quote`
+---
 
-Bảng giá của một mã, **đơn vị đồng**. Ví dụ minh hoạ trong giờ giao dịch:
+## Bảng giá và giao dịch
+
+### `GET /stock/{symbol}/quote` · DNSE (`QUOTE_SOURCE`)
+
+Với nguồn `dnse`: giá tham chiếu/trần/sàn **chính thức của sở** (bảng G1) và 3 bước giá mua/bán tốt nhất của bảng lô chẵn.
 
 ```json
 {
-  "symbol": "VCB", "exchange": "HOSE",
-  "reference_price": 57200.0, "ceiling_price": 61200.0, "floor_price": 53200.0,
-  "open_price": 57300.0, "high_price": 57800.0, "low_price": 57100.0, "close_price": 57600.0,
-  "bid_price_1": 57500.0, "bid_vol_1": 12000, "bid_price_2": 57400.0, "bid_vol_2": 30500, "bid_price_3": 57300.0, "bid_vol_3": 8100,
-  "ask_price_1": 57600.0, "ask_vol_1": 9800,  "ask_price_2": 57700.0, "ask_vol_2": 21000, "ask_price_3": 57800.0, "ask_vol_3": 15400,
-  "foreign_buy_volume": 250000, "foreign_sell_volume": 180000
+  "symbol": "PDR", "exchange": "HOSE", "trading_date": "2026-11-09T00:00:00+07:00",
+  "reference_price": 11.75, "ceiling_price": 12.55, "floor_price": 10.95,
+  "bid_price_1": 11.6, "bid_vol_1": 3970, "bid_price_2": 11.55, "bid_vol_2": 12440, "bid_price_3": 11.5, "bid_vol_3": 8820,
+  "ask_price_1": 11.65, "ask_vol_1": 48090, "ask_price_2": 11.7, "ask_vol_2": 32210, "ask_price_3": 11.75, "ask_vol_3": 14690,
+  "time": "2026-11-09T14:45:03.278000+07:00",
+  "total_bid_volume": 0, "total_ask_volume": 0
 }
 ```
 
-Ngoài giờ giao dịch, các trường giá khớp và dư mua/bán là `null`. Chỉ còn tham chiếu, trần và sàn của phiên kế tiếp.
+Với `QUOTE_SOURCE=fhsc` hoặc `tcbs`: trả nguyên bảng giá đầy đủ của nguồn (giá, khối lượng phiên, 3 bước giá, khối ngoại); tên cột theo nguồn.
 
-### `GET /quotes?symbols=VCB,FPT,HPG`
+### `GET /quotes?symbols=PDR,SHS` · DNSE (`QUOTE_SOURCE`)
 
-Bảng giá của tối đa 50 mã, **chỉ tốn 1 lượt gọi vnstock**. Nên dùng khi làm bảng theo dõi nhiều mã.
+Bảng giá nhiều mã: `{"count": 2, "data": [ ...như /quote... ]}`. Nguồn `dnse` tối đa 10 mã mỗi lượt (mỗi mã tốn 2 lượt gọi); `fhsc`/`tcbs` tối đa 50 mã trong 1 lượt gọi.
 
-```json
-{ "count": 3, "data": [ { "symbol": "FPT", "...": "giống /quote" }, { "symbol": "HPG" }, { "symbol": "VCB" } ] }
-```
+### `GET /stock/{symbol}/trades` · DNSE
 
-Mã không tồn tại sẽ bị bỏ qua.
+Lệnh khớp trong phiên, mới nhất trước.
 
-### `GET /stock/{symbol}/company`
-
-```json
-{
-  "symbol": "VCB",
-  "name": "Ngân hàng Thương mại Cổ phần Ngoại thương Việt Nam",
-  "short_name": "Vietcombank",
-  "sector": "Banks",
-  "profile": "Ngân hàng Thương mại Cổ phần Ngoại thương Việt Nam (Vietcombank) chính thức đi vào hoạt động ...",
-  "listing_date": "2009-06-30T00:00:00+07:00",
-  "issued_share": 8355675094.0
-}
-```
-
----
-
-## Chỉ số
-
-### `GET /index/{symbol}/history`
-
-Giống `/stock/{symbol}/history` nhưng dùng cho chỉ số: `VNINDEX`, `VN30`, `HNXINDEX`, `HNX30`, `UPCOMINDEX`, `VN100`... Xem danh sách đầy đủ ở `/indices`.
-
-### `GET /index/{symbol}/members`
-
-```json
-{ "index": "VN30", "count": 30, "symbols": ["ACB", "BID", "BSR", "CTG", "FPT", "..."] }
-```
-
----
-
-## Danh mục
-
-Dữ liệu ít thay đổi nên được cache 24 giờ.
-
-| API | Trả về |
-|---|---|
-| `GET /symbols` | Toàn bộ mã niêm yết (~1.700 mã): `symbol`, `org_name` |
-| `GET /indices` | Các chỉ số: `symbol`, `name`, `description`, `full_name`, `group` |
-| `GET /groups/{group}/symbols` | Mã theo nhóm: `VN30`, `VN100`, `VNMID`, `VNSML`, `HNX30`... |
-
----
-
-## Cần tài khoản vnstock
-
-Các API dưới đây chỉ chạy khi bạn điền `VNSTOCK_API_KEY` có cấp cho phép. Nếu chưa có quyền, API trả **403** kèm tên chức năng còn thiếu. Kết quả là dữ liệu thô từ vnstock, chuyển sang JSON. Tên cột phụ thuộc vào nguồn và phiên bản vnstock.
-
-| API | Tham số | Dữ liệu |
+| Tham số | Mặc định | Mô tả |
 |---|---|---|
-| `GET /stock/{symbol}/financials/{report}` | `period=quarter\|year` | `report`: `income_statement`, `balance_sheet`, `cash_flow`, `ratio` |
-| `GET /stock/{symbol}/company/{section}` | | `section`: `shareholders`, `officers`, `subsidiaries`, `events` |
-| `GET /stock/{symbol}/trades` | `limit` (1–1000) | Lệnh khớp trong phiên |
-| `GET /stock/{symbol}/foreign-flow` | `start`, `end` | Giao dịch khối ngoại |
-| `GET /macro/{indicator}` | `start`, `end` | `gdp`, `cpi`, `fdi`, `import-export`, `credit`, `money-supply`, `exchange-rate`, `interbank-rate`, `deposit-rate`, `policy-rate` |
+| `limit` | 100 | 1–1000 |
 
-Mỗi API trả về dạng `{ "symbol": ..., "count": N, "data": [ {...}, ... ] }`.
+```json
+{
+  "symbol": "PDR", "count": 2,
+  "data": [
+    { "time": "2026-11-09T14:45:03.273000+07:00", "price": 11.6, "volume": 100, "match_type": "ATC", "id": "1", "accumulated_volume": 523700 },
+    { "time": "2026-11-09T14:45:03.272000+07:00", "price": 11.6, "volume": 300, "match_type": "ATC", "id": "10", "accumulated_volume": 517280 }
+  ]
+}
+```
+
+DNSE phân trang lệnh khớp từ đầu phiên, nên cuối phiên một lượt gọi có thể mất vài giây.
+
+### `GET /stock/{symbol}/foreign-flow` · DNSE
+
+Khối ngoại mua/bán theo ngày. `*_vol` là cổ phiếu, `*_val` là đồng.
+
+| Tham số | Mô tả |
+|---|---|
+| `start`, `end` | Khoảng ngày. Chỉ có `start` thì lấy đến hôm nay. Không truyền thì là phiên gần nhất |
+
+```json
+{
+  "symbol": "PDR", "count": 2,
+  "data": [
+    { "time": "2026-11-06T00:00:00+07:00", "buy_vol": 330187.0, "buy_val": 3766673550.0, "sell_vol": 84600.0,
+      "sell_val": 1001005000.0, "net_vol": 245587.0, "net_val": 2765668550.0 },
+    { "time": "2026-11-09T00:00:00+07:00", "buy_vol": 40200.0, "buy_val": 469195000.0, "sell_vol": 496300.0,
+      "sell_val": 6044025000.0, "net_vol": -456100.0, "net_val": -5574830000.0 }
+  ]
+}
+```
+
+---
+
+## Chỉ số và danh mục
+
+| API | Nguồn | Tham số | Kết quả |
+|---|---|---|---|
+| `GET /index/{symbol}/history` | DNSE | như `/stock/{symbol}/history` | Nến của `VNINDEX`, `VN30`, `HNXINDEX`, `UPCOMINDEX`... |
+| `GET /symbols` | DNSE | | Mọi cổ phiếu niêm yết: `symbol`, `exchange`, `type`, `organ_name`, `listing_date`... |
+| `GET /index/{symbol}/members` | SSI | | `{"index": "VN30", "count": 30, "symbols": ["ACB", ...]}` |
+| `GET /groups/{group}/symbols` | SSI | | Mã theo nhóm `VN30`, `VN100`, `HNX30`... |
+| `GET /indices` | SSI | | Danh sách chỉ số |
+
+```json
+{ "symbol": "VNINDEX", "interval": "1D", "count": 2,
+  "data": [
+    { "time": "2026-11-06", "open": 1713.46, "high": 1734.42, "low": 1713.46, "close": 1725.36, "volume": 972595584 },
+    { "time": "2026-11-09", "open": 1728.27, "high": 1728.27, "low": 1701.9, "close": 1714.32, "volume": 670101248 }
+  ] }
+```
+
+Giá trị chỉ số tính bằng điểm, không phải nghìn đồng.
+
+---
+
+## Doanh nghiệp
+
+Cần khoá **FHSC** (`COMPANY_SOURCE`).
+
+| API | Tham số | Ghi chú |
+|---|---|---|
+| `GET /stock/{symbol}/company` | | Hồ sơ: tên, ngành, giới thiệu |
+| `GET /stock/{symbol}/company/{section}` | | `section`: `shareholders` (cổ đông lớn), `ownership` (cơ cấu sở hữu), `insider_trading` (giao dịch nội bộ), `events` (sự kiện) |
+| `GET /stock/{symbol}/financials/{report}` | `period=quarter\|year` | `report`: `income_statement`, `balance_sheet`, `cash_flow` (chuẩn VAS) |
+
+Kết quả dạng `{"symbol", "count", "data": [...]}` với cột theo vnstock 6.
 
 ---
 
 ## Hệ thống
 
-| API | Trả về |
-|---|---|
-| `GET /health` | `{"status": "healthy"}`, dùng cho healthcheck |
-| `GET /status` | Cấp tài khoản vnstock, hạn mức, số lượt đã dùng (`used`), danh sách chức năng được phép (`rule.routes`) |
+### `GET /health`
+
+Trạng thái engine. Dùng cho healthcheck: luôn trả 200 khi API còn chạy, kể cả khi nguồn đang lỗi.
+
+```json
+{ "status": "ok", "uptimeSeconds": 68, "marketOpen": false, "cachedSymbols": 1, "listedSymbols": 1541,
+  "upstreamCallsLastMinute": 4, "upstreamLimitPerMinute": 30, "priorityAgeSeconds": 61 }
+```
+
+`priorityAgeSeconds`: số giây từ lần làm mới gần nhất của mã ưu tiên đầu tiên (`PRIORITY_SYMBOLS`). Số này tăng mãi nghĩa là nguồn đang lỗi.
+
+### `GET /status`
+
+Bản vnstock, hạn dùng của bản đó, nguồn nào đã có khoá (không bao giờ in giá trị khoá).
+
+```json
+{ "vnstock": "6.0.0rc5", "releaseExpiresAt": "2026-12-08T23:40:04Z", "tier": "guest",
+  "serverMessage": null, "serverWarning": null,
+  "keys": { "dnse": true, "ssi": false, "tcbs": false, "fhsc": false, "fmp": false },
+  "sources": { "data": "dnse", "quote": "dnse", "company": "fhsc", "index": "ssi" },
+  "upstreamCallsLastMinute": 4, "upstreamLimitPerMinute": 30 }
+```
+
+### `GET /`
+
+Tên dịch vụ, phiên bản, các endpoint chính và đường dẫn `/docs`.
 
 ---
 
 ## Mã lỗi
 
-Lỗi luôn trả về dạng `{ "detail": "...", "hint": "..." }`.
+Lỗi trả về dạng `{"detail": "...", "hint": "..."}` (`hint` có khi lỗi đến từ nguồn).
 
-| Mã | Khi nào | Nên làm gì |
+| Mã | Khi nào | Nên làm |
 |---|---|---|
-| `400` | Tham số sai, ví dụ ngày sai định dạng | Sửa tham số |
-| `403` | Tài khoản vnstock chưa có quyền với dữ liệu này | Xem [vnstock-account.md](vnstock-account.md) |
-| `404` | Mã không tồn tại hoặc không có dữ liệu trong khoảng đã chọn | Kiểm tra mã và ngày |
-| `422` | Tham số không hợp lệ: mã có ký tự lạ, `interval` sai | Xem thông báo trong `detail` |
-| `429` | Hết lượt gọi vnstock (theo phút, giờ, ngày hoặc tháng) | Đợi, tăng cache, gộp mã bằng `/quotes` |
-| `503` | Nguồn dữ liệu lỗi hoặc API key không hợp lệ | Thử lại sau, xem `docker compose logs` |
+| `400` | Mã sai định dạng, ngày sai định dạng, quá số mã cho phép | Sửa tham số |
+| `403` | Chưa có khoá cho nguồn của API này, hoặc khoá không có quyền | Đặt biến trong `hint` vào `.env`, xem [data-sources.md](data-sources.md) |
+| `404` | Mã không niêm yết, hoặc nguồn không có dữ liệu | Kiểm tra mã |
+| `422` | Tham số ngoài danh sách cho phép (ví dụ `interval=7X`) | Sửa tham số |
+| `429` | Chạm trần lượt gọi nguồn mỗi phút của API, hoặc nguồn đang giới hạn tốc độ | Đợi theo `Retry-After`, gộp mã bằng `/stocks` |
+| `502` | `/stock/*`: lần đầu hỏi mã này mà nguồn lỗi | Thử lại sau `Retry-After` |
+| `503` | `/stock/*`: hết lượt gọi hoặc nguồn phản hồi chậm ở lần đầu hỏi một mã; API khác: nguồn lỗi | Thử lại sau `Retry-After` |
+| `500` | Lỗi của API | Báo lỗi kèm log |
 
 ---
 
-## Cache
+## Cache và hạn mức
 
-Mỗi kết quả được giữ lại một thời gian. Trong khoảng đó, gọi lại không tốn lượt vnstock và trả về gần như ngay lập tức (~1ms).
+| Dữ liệu | Giữ trong |
+|---|---|
+| `/stock/*`, `/stocks` | 20 giây (mã ưu tiên) hoặc 30 giây trong giờ giao dịch, 5 phút ngoài giờ. Hết hạn vẫn trả ngay, làm mới ở nền |
+| Mã không có dữ liệu | 1 giờ |
+| Bảng giá, lệnh khớp, nến trong phiên | `CACHE_TTL` (15 giây) |
+| Lịch sử đã qua, khoảng ngày, khối ngoại | `CACHE_TTL_HISTORY` (5 phút) |
+| Danh mục, doanh nghiệp, tài chính | `CACHE_TTL_REFERENCE` (1 ngày) |
 
-| Loại dữ liệu | Biến | Mặc định |
-|---|---|---|
-| Phiên hôm nay, bảng giá, nến trong ngày | `CACHE_TTL` | 15 giây |
-| Lịch sử giá đã qua | `CACHE_TTL_HISTORY` | 5 phút |
-| Doanh nghiệp, danh mục, báo cáo tài chính, vĩ mô | `CACHE_TTL_REFERENCE` | 24 giờ |
-
-Nhiều request cùng hỏi một dữ liệu tại cùng thời điểm sẽ dùng chung **một** lượt gọi.
+Mọi lượt gọi nguồn của cả API đều tính vào trần `BUDGET_PER_MINUTE` (mặc định 30/phút), trong đó `BUDGET_RESERVED_FOR_PRIORITY` (6) dành cho mã ưu tiên. Một lượt làm mới `/stock/{symbol}` tốn 2 lượt trong giờ giao dịch, 1 lượt ngoài giờ. Nhiều request cùng lúc cho cùng một dữ liệu chỉ tốn 1 lượt gọi.

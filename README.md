@@ -3,22 +3,22 @@
 [![Tests](https://github.com/tran-minh-khoi/viet-nam-stock/actions/workflows/test.yml/badge.svg)](https://github.com/tran-minh-khoi/viet-nam-stock/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-API chứng khoán Việt Nam **chạy trên máy của bạn**: giá cổ phiếu, chỉ số VNINDEX/VN30, bảng giá, thông tin doanh nghiệp... trả về dạng JSON để dùng cho web, app, bot, Google Sheets hay script phân tích.
+API chứng khoán Việt Nam **chạy trên máy của bạn**: giá cổ phiếu, chỉ số VNINDEX/VN30, bảng giá, khối ngoại, báo cáo tài chính... trả về dạng JSON để dùng cho web, app, bot, Google Sheets hay script phân tích.
 
-Xây trên thư viện [vnstock](https://vnstocks.com). Một lệnh để chạy, có trang thử API ngay trên trình duyệt.
+Xây trên [vnstock thế hệ 6](https://vnstocks.com/docs/vnstock/v6): bạn chọn nguồn dữ liệu (DNSE, SSI, TCBS, FHSC), dùng **khoá API của chính bạn** do nguồn đó cấp, và nhận dữ liệu đã chuẩn hoá. Có trang thử API ngay trên trình duyệt.
 
 Đây là **dự án mã nguồn mở phi lợi nhuận**, làm vì cộng đồng nhà đầu tư và lập trình viên Việt Nam. Không bán gì, không quảng cáo. Code của project không thu thập dữ liệu của bạn. Riêng vnstock có gửi thống kê sử dụng ẩn danh, tắt được bằng `VNSTOCK_TELEMETRY=0` trong `.env`.
 
-> 🇬🇧 *A self-hosted REST API for Vietnamese stock market data, built on vnstock. Run `docker compose up -d`, then open http://localhost:8000/docs. Docs are in Vietnamese; endpoint reference: [docs/API.md](docs/API.md).*
+> 🇬🇧 *A self-hosted REST API for Vietnamese stock market data, built on vnstock 6. Get an Open API key from a broker (DNSE is enough to start), put it in `.env`, run `docker compose up -d`, open http://localhost:8000/docs. Docs are in Vietnamese; endpoint reference: [docs/API.md](docs/API.md).*
 
 ---
 
 ## Mục lục
 
 - [Có gì trong này](#có-gì-trong-này)
-- [Chạy thử trong 5 phút](#chạy-thử-trong-5-phút)
+- [Chạy thử](#chạy-thử)
 - [Dùng API](#dùng-api)
-- [Tài khoản vnstock và hạn mức](#tài-khoản-vnstock-và-hạn-mức)
+- [Nguồn dữ liệu và khoá](#nguồn-dữ-liệu-và-khoá)
 - [Cấu hình](#cấu-hình)
 - [Câu hỏi thường gặp](#câu-hỏi-thường-gặp)
 - [Lưu ý về giấy phép](#lưu-ý-về-giấy-phép)
@@ -26,51 +26,66 @@ Xây trên thư viện [vnstock](https://vnstocks.com). Một lệnh để chạ
 
 ## Có gì trong này
 
-| Nhóm | Bạn lấy được | Tài khoản Khách (không cần đăng ký) |
-|---|---|:---:|
-| Cổ phiếu | Phiên hôm nay, N phiên gần nhất, khoảng ngày, nến 1 phút → 1 tháng | ✅ |
-| Bảng giá | Giá tham chiếu/trần/sàn, 3 bước giá mua/bán, nhiều mã một lúc | ✅ |
-| Doanh nghiệp | Tên, ngành, giới thiệu, ngày niêm yết, số cổ phiếu | ✅ |
-| Chỉ số | VNINDEX, VN30, HNXINDEX...: lịch sử giá, danh sách mã thành phần | ✅ |
-| Danh mục | Toàn bộ mã niêm yết, danh sách chỉ số, mã theo nhóm (VN30, VN100...) | ✅ |
-| Tài chính | Báo cáo KQKD, cân đối kế toán, lưu chuyển tiền tệ, chỉ số tài chính | 🔑 |
-| Giao dịch | Lệnh khớp trong phiên, khối ngoại | 🔑 |
-| Doanh nghiệp (mở rộng) | Cổ đông, ban lãnh đạo, công ty con, sự kiện | 🔑 |
-| Vĩ mô | GDP, CPI, FDI, xuất nhập khẩu, tỷ giá, lãi suất | 🔑 |
+| Nhóm | Bạn lấy được | Nguồn cần khoá |
+|---|---|---|
+| Cổ phiếu | Phiên hôm nay + giá đang khớp, N phiên gần nhất, khoảng ngày, nến 1 phút → 1 tháng | **DNSE** |
+| Bảng giá | Giá tham chiếu/trần/sàn chính thức, 3 bước giá mua/bán | **DNSE** (hoặc FHSC, TCBS) |
+| Giao dịch | Lệnh khớp trong phiên, khối ngoại theo ngày | **DNSE** |
+| Chỉ số | VNINDEX, VN30, HNXINDEX...: lịch sử giá | **DNSE** |
+| Danh mục | Toàn bộ mã niêm yết | **DNSE** |
+| Thành phần chỉ số, nhóm mã | Mã thuộc VN30, VN100, HNX30... và danh sách chỉ số | SSI |
+| Doanh nghiệp | Hồ sơ, cổ đông lớn, cơ cấu sở hữu, giao dịch nội bộ, sự kiện | FHSC |
+| Tài chính | Kết quả kinh doanh, cân đối kế toán, lưu chuyển tiền tệ | FHSC |
 
-🔑 = cần API key vnstock có cấp phù hợp. Chưa có thì API trả lỗi 403 kèm lý do, không bị treo hay sập. Xem [tài khoản vnstock](docs/vnstock-account.md).
+**Chỉ cần một khoá DNSE là dùng được phần lớn API.** Nhóm nào chưa có khoá thì trả lỗi 403 kèm tên biến cần đặt, không treo hay sập.
 
 Ngoài ra:
-- **Tiết kiệm lượt gọi:** API tự cache. 100 người cùng xem VCB trong 15 giây vẫn chỉ tốn 1 lượt gọi vnstock.
-- **Báo lỗi dễ hiểu:** hết lượt thì trả 429, chưa đủ quyền thì 403, sai mã thì 404, kèm gợi ý cách xử lý bằng tiếng Việt.
+- **Không bao giờ bắt người dùng chờ nguồn:** `/stock/*` giữ dữ liệu từng mã trong bộ nhớ, hết hạn vẫn trả ngay rồi làm mới ở nền. Mã ưu tiên (`PRIORITY_SYMBOLS`) được làm mới định kỳ kể cả khi không ai gọi.
+- **Bảo vệ khoá của bạn:** tự đặt trần số lượt gọi nguồn mỗi phút (`BUDGET_PER_MINUTE`). 100 người cùng xem VCB vẫn chỉ tốn 1 lượt gọi.
+- **Báo lỗi dễ hiểu:** thiếu khoá 403, nguồn giới hạn tốc độ 429, sai mã 404, nguồn lỗi 503, kèm `hint` tiếng Việt.
 - **Trang thử API** tại `/docs`: bấm và xem kết quả, không cần viết code.
 
-## Chạy thử trong 5 phút
+## Chạy thử
 
-Bạn chỉ cần **Docker**. Không cần cài Python hay biết lập trình.
+Bạn cần **Docker** và **một khoá Open API của DNSE**. Không cần cài Python hay biết lập trình.
 
-### Bước 1: Cài Docker Desktop
+### Bước 1: Lấy khoá DNSE
+
+1. Mở tài khoản chứng khoán DNSE nếu chưa có (miễn phí, làm online).
+2. Đăng nhập DNSE, vào phần quản lý **Open API**, tạo **API Key** và **API Secret**.
+3. **Lưu Secret ngay**: DNSE chỉ hiện Secret một lần.
+
+Chi tiết từng nguồn và cách kiểm tra khoá: [docs/data-sources.md](docs/data-sources.md).
+
+### Bước 2: Cài Docker Desktop
 
 Tải tại [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/), cài như phần mềm bình thường, rồi **mở Docker Desktop lên** (đợi biểu tượng cá voi báo *running*).
 
 - **Windows:** nếu được hỏi cài WSL 2 thì chọn đồng ý, rồi khởi động lại máy.
 - **Mac:** chọn đúng bản *Apple Silicon* (M1/M2/M3/M4) hoặc *Intel*.
 
-### Bước 2: Tải code về
+### Bước 3: Tải code về và điền khoá
 
-**Cách dễ:** trên trang GitHub của project, bấm nút xanh **Code → Download ZIP**, rồi giải nén.
+**Cách dễ:** trên trang GitHub của project, bấm nút xanh **Code → Download ZIP**, rồi giải nén. Hoặc nếu có git:
 
-**Nếu bạn có git:**
 ```bash
 git clone https://github.com/tran-minh-khoi/viet-nam-stock.git
 ```
 
-### Bước 3: Mở Terminal tại thư mục vừa tải
+Trong thư mục vừa tải, copy file `.env.example` thành `.env`, mở bằng Notepad hoặc TextEdit và điền:
 
-- **Mac:** chuột phải vào thư mục `viet-nam-stock` → *Services* → **New Terminal at Folder**. Hoặc mở Terminal, gõ `cd ` (có dấu cách) rồi kéo thả thư mục vào và nhấn Enter.
-- **Windows:** mở thư mục, bấm vào thanh địa chỉ, gõ `powershell`, nhấn Enter.
+```
+DNSE_API_KEY=key_cua_ban
+DNSE_API_SECRET=secret_cua_ban
+```
+
+**Giữ file `.env` bí mật.** File này đã nằm trong `.gitignore`, đừng commit hay gửi cho ai.
 
 ### Bước 4: Chạy
+
+Mở Terminal tại thư mục project:
+- **Mac:** chuột phải vào thư mục `viet-nam-stock` → *Services* → **New Terminal at Folder**.
+- **Windows:** mở thư mục, bấm vào thanh địa chỉ, gõ `powershell`, nhấn Enter.
 
 ```bash
 docker compose up -d
@@ -82,9 +97,9 @@ Lần đầu mất khoảng 1–2 phút để tải và cài. Thấy `Container 
 
 👉 **http://localhost:8000/docs**
 
-Chọn một API, ví dụ `GET /stock/{symbol}`, bấm **Try it out**, gõ `VCB`, bấm **Execute**. Kết quả hiện ngay bên dưới.
+Chọn một API, ví dụ `GET /stock/{symbol}`, bấm **Try it out**, gõ `VCB`, bấm **Execute**. Hoặc mở thẳng: http://localhost:8000/stock/VCB
 
-Hoặc mở thẳng: http://localhost:8000/stock/VCB
+Kiểm tra khoá: http://localhost:8000/status, mục `"keys"` phải có `"dnse": true`.
 
 ### Các lệnh hay dùng
 
@@ -103,19 +118,21 @@ Danh sách chính, đầy đủ tham số và ví dụ kết quả ở [docs/API
 
 | API | Dùng để |
 |---|---|
-| `GET /stock/VCB` | Phiên mới nhất, phiên trước, giá trần/sàn |
-| `GET /stock/VCB/recent?days=10` | 10 phiên gần nhất |
+| `GET /stock/VCB` | Phiên mới nhất, phiên trước, giá đang khớp, giá trần/sàn |
+| `GET /stock/VCB/recent?days=10` | 10 phiên gần nhất (tối đa 30) |
+| `GET /stocks?symbols=VCB,FPT,HPG` | Như `/stock/VCB` cho nhiều mã một lượt (tối đa 10) |
 | `GET /stock/VCB/day-range?start_date=2026-01-01&end_date=2026-01-31` | Các phiên trong khoảng ngày |
 | `GET /stock/VCB/history?interval=1H&limit=50` | Nến 1m, 5m, 15m, 30m, 1H, 1D, 1W, 1M |
 | `GET /stock/VCB/quote` | Bảng giá: tham chiếu, trần, sàn, dư mua/bán |
-| `GET /quotes?symbols=VCB,FPT,HPG` | Bảng giá nhiều mã, chỉ tốn **1 lượt gọi** |
-| `GET /stock/VCB/company` | Thông tin doanh nghiệp |
+| `GET /stock/VCB/trades` | Lệnh khớp trong phiên |
+| `GET /stock/VCB/foreign-flow` | Khối ngoại mua/bán theo ngày |
 | `GET /index/VNINDEX/history` | Lịch sử chỉ số |
-| `GET /index/VN30/members` | Mã thuộc VN30 |
-| `GET /symbols`, `GET /indices`, `GET /groups/VN30/symbols` | Danh mục mã và chỉ số |
-| `GET /status` | Tài khoản vnstock đang ở cấp nào, đã dùng bao nhiêu lượt |
+| `GET /symbols` | Toàn bộ mã niêm yết |
+| `GET /index/VN30/members`, `GET /groups/VN30/symbols`, `GET /indices` | Thành phần chỉ số, nhóm mã (cần SSI) |
+| `GET /stock/VCB/company`, `/company/shareholders`, `/financials/income_statement` | Doanh nghiệp, tài chính (cần FHSC) |
+| `GET /status` | Bản vnstock, hạn dùng, nguồn nào đã có khoá |
 
-> **Đơn vị giá:** `/stock/*`, `/history`, `/index/*` tính bằng **nghìn đồng** (57.2 = 57.200đ). `/quote`, `/quotes` tính bằng **đồng**.
+> **Đơn vị giá:** mọi giá tính bằng **nghìn đồng** (57.2 = 57.200đ). Khối lượng tính bằng cổ phiếu.
 
 ### Ví dụ gọi API từ code
 
@@ -135,53 +152,57 @@ print(vcb["currentPrice"])
 
 **Terminal:**
 ```bash
-curl http://localhost:8000/quotes?symbols=VCB,FPT
+curl "http://localhost:8000/stocks?symbols=VCB,FPT"
 ```
 
-## Tài khoản vnstock và hạn mức
+## Nguồn dữ liệu và khoá
 
-Không đăng ký gì, API chạy với **tài khoản Khách** của vnstock:
+vnstock thế hệ 6 không còn nguồn "mặc định" dùng chung: dữ liệu đi thẳng từ máy bạn tới nguồn bạn chọn, bằng khoá của bạn. vnstock lo phần kết nối và chuẩn hoá cột.
 
-| | Tài khoản Khách |
-|---|---|
-| Lượt gọi | 10/phút · 100/giờ · 300/ngày · 1.000/tháng |
-| Dữ liệu | Các nhóm có ✅ ở bảng trên |
-| Lịch sử giá ngày | 365 ngày gần nhất |
+| Nguồn | Khoá | Project dùng cho |
+|---|---|---|
+| **DNSE** | `DNSE_API_KEY`, `DNSE_API_SECRET` | Giá, lệnh khớp, bảng giá, chỉ số, danh mục, khối ngoại (`DATA_SOURCE`, `QUOTE_SOURCE`) |
+| SSI | `SSI_API_KEY`, `SSI_API_SECRET` | Thành phần chỉ số, nhóm mã, danh sách chỉ số (`INDEX_SOURCE`) |
+| FHSC | `FHSC_API_KEY` | Doanh nghiệp, báo cáo tài chính (`COMPANY_SOURCE`); bảng giá đầy đủ (`QUOTE_SOURCE=fhsc`) |
+| TCBS | `TCBS_API_KEY` | Bảng giá (`QUOTE_SOURCE=tcbs`). Phiên TCBS cần Smart OTP và hết sau 8 giờ, không hợp chạy server |
 
-Nhờ cache, 1.000 lượt/tháng đủ cho một danh mục theo dõi nhỏ. Muốn nhiều hơn thì **đăng ký miễn phí tại [vnstocks.com](https://vnstocks.com)**, lấy API key rồi dán vào file `.env`:
+Mỗi nguồn có hạn mức và điều khoản riêng, do nguồn quyết định. Chi tiết: [docs/data-sources.md](docs/data-sources.md).
 
-```bash
-cp .env.example .env        # Windows: copy .env.example .env
-# mở .env, điền: VNSTOCK_API_KEY=key_cua_ban
-docker compose up -d
-```
-
-Kiểm tra bằng http://localhost:8000/status. Chi tiết: [docs/vnstock-account.md](docs/vnstock-account.md).
-
-> ⚠️ Mỗi bản vnstock chỉ dùng được khoảng 1 năm (bản 5.2.1 hết hạn 27/10/2027). Hết hạn thì cập nhật project bằng `git pull` và `docker compose up -d --build`.
+> ⚠️ **vnstock 6 đang ở bản thử (rc) và mỗi bản chỉ dùng được một thời gian** (6.0.0rc5 dùng được đến hết 09/12/2026, xem `releaseExpiresAt` trong `/status`). Gần hạn thì cập nhật project bằng `git pull` và `docker compose up -d --build`.
 
 ## Cấu hình
 
-Tất cả đều không bắt buộc. Copy `.env.example` thành `.env` rồi sửa:
+Copy `.env.example` thành `.env` rồi sửa. Ngoài khoá nguồn, mọi dòng đều không bắt buộc:
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `VNSTOCK_API_KEY` | *(trống)* | API key vnstock. Trống = tài khoản Khách |
+| `DNSE_API_KEY`, `DNSE_API_SECRET` | *(trống)* | Khoá DNSE. Thiếu thì phần lớn API không có dữ liệu |
+| `DATA_SOURCE` | `dnse` | Nguồn giá, lệnh khớp, danh mục, chỉ số (`dnse`, `ssi`, `tcbs`, `fhsc`) |
+| `QUOTE_SOURCE` | `dnse` | Nguồn bảng giá (`dnse`, `fhsc`, `tcbs`) |
+| `COMPANY_SOURCE` | `fhsc` | Nguồn doanh nghiệp, tài chính |
+| `INDEX_SOURCE` | `ssi` | Nguồn thành phần chỉ số, nhóm mã |
+| `BUDGET_PER_MINUTE` | `30` | Trần số lượt gọi nguồn mỗi phút của cả API |
+| `PRIORITY_SYMBOLS` | *(trống)* | Mã luôn được làm mới ở nền, ví dụ `VCB,FPT` |
+| `SHORT_NAMES` | *(trống)* | Tên ngắn thay cho `name`, ví dụ `"VCB=Vietcombank;FPT=FPT"` |
+| `NAMES_FILE` | *(trống)* | File JSON tên công ty dùng thay tên của nguồn (giữ tên không đổi khi đổi nguồn) |
 | `PORT` | `8000` | Cổng trên máy bạn (Docker) |
-| `DATA_SOURCE` | `KBS` | Nguồn giá: `KBS` hoặc `VCI` |
 | `CORS_ORIGINS` | `*` | Các website được gọi API từ trình duyệt, cách nhau bằng dấu phẩy |
-| `CACHE_TTL` | `15` | Số giây cache giá trong phiên |
-| `CACHE_TTL_HISTORY` | `300` | Số giây cache lịch sử giá |
-| `CACHE_TTL_REFERENCE` | `86400` | Số giây cache thông tin doanh nghiệp, danh mục, báo cáo tài chính |
+| `ENABLE_DOCS` | `true` | Bật trang `/docs` |
+| `CACHE_TTL`, `CACHE_TTL_HISTORY`, `CACHE_TTL_REFERENCE` | `15`, `300`, `86400` | Số giây cache của các API ngoài `/stock/*` |
 | `REDIS_URL` | *(trống)* | Redis để cache không mất khi restart (không bắt buộc) |
-| `FAST_SYMBOLS` | *(trống)* | Các mã lấy giá khớp lệnh mới nhất (cần cấp có quyền "trades") |
 | `LOG_LEVEL` | `INFO` | Mức log |
 
 Sửa `.env` xong thì chạy lại `docker compose up -d`.
 
-Muốn chạy trên VPS, chạy không dùng Docker (PM2) hoặc gắn tên miền và HTTPS: xem [docs/deploy.md](docs/deploy.md).
+Muốn chạy trên VPS, chạy không dùng Docker (PM2) hoặc gắn tên miền và HTTPS: xem [docs/deploy.md](docs/deploy.md). Đang dùng bản 3.x (vnstock 5): xem [CHANGELOG.md](CHANGELOG.md) mục 4.0.0.
 
 ## Câu hỏi thường gặp
+
+<details>
+<summary><b>Mọi API đều trả 502 hoặc 403 "Chưa có khoá"</b></summary>
+
+Chưa điền khoá DNSE, hoặc điền sai. Mở http://localhost:8000/status: `"keys": {"dnse": false}` nghĩa là API chưa đọc được khoá. Kiểm tra lại `.env` (không có dấu cách thừa) rồi chạy `docker compose up -d`. Log (`docker compose logs -f`) ghi rõ lý do.
+</details>
 
 <details>
 <summary><b>Báo lỗi <code>Cannot connect to the Docker daemon</code></b></summary>
@@ -192,45 +213,32 @@ Docker Desktop chưa mở. Mở Docker Desktop, đợi nó báo *running*, rồi
 <details>
 <summary><b>Báo lỗi <code>port is already allocated</code></b></summary>
 
-Cổng 8000 đang bị phần mềm khác dùng. Tạo file `.env` có dòng `PORT=8080`, chạy lại `docker compose up -d`, rồi mở http://localhost:8080/docs.
+Cổng 8000 đang bị phần mềm khác dùng. Thêm dòng `PORT=8080` vào `.env`, chạy lại `docker compose up -d`, rồi mở http://localhost:8080/docs.
 </details>
 
 <details>
-<summary><b>Nhận lỗi 429 "Đã dùng hết hạn mức"</b></summary>
+<summary><b>Nhận lỗi 503 "Hệ thống đang bận" hoặc 429</b></summary>
 
-Bạn đã hết lượt gọi của vnstock. Hạn mức theo phút sẽ hồi sau 1 phút. Để đỡ bị:
-- Dùng `/quotes?symbols=A,B,C` thay vì gọi từng mã.
-- Tăng `CACHE_TTL` (ví dụ 60).
-- Đăng ký API key miễn phí để có hạn mức cao hơn.
+API đã chạm trần lượt gọi nguồn mỗi phút mà bạn đặt (`BUDGET_PER_MINUTE`), hoặc nguồn đang giới hạn tốc độ. Thử lại sau ít giây. Để đỡ bị: gọi `/stocks?symbols=A,B,C` thay vì từng mã, đặt các mã hay xem vào `PRIORITY_SYMBOLS`.
 </details>
 
 <details>
-<summary><b>Nhận lỗi 403 "không thuộc quyền của cấp Khách"</b></summary>
+<summary><b>Ngoài giờ giao dịch, giá hiện tại bằng giá đóng cửa</b></summary>
 
-Dữ liệu này cần tài khoản vnstock cấp cao hơn. Xem [docs/vnstock-account.md](docs/vnstock-account.md).
-</details>
-
-<details>
-<summary><b>Ngoài giờ giao dịch, bảng giá toàn <code>null</code></b></summary>
-
-Bình thường. Ngoài giờ giao dịch, nguồn chỉ trả giá tham chiếu, trần và sàn của phiên kế tiếp. Muốn xem giá đóng cửa gần nhất thì dùng `/stock/{symbol}`.
+Bình thường. Ngoài 8:45–15:05 các ngày làm việc, API không gọi lệnh khớp, `currentPrice` là giá đóng cửa của phiên gần nhất.
 </details>
 
 <details>
 <summary><b>Làm sao cho máy khác hoặc điện thoại trong cùng mạng Wi-Fi gọi được?</b></summary>
 
-Dùng IP của máy đang chạy Docker, ví dụ `http://192.168.1.10:8000`. API này dành cho bạn dùng cá nhân. Đừng mở công khai ra Internet cho người lạ dùng, xem [lưu ý về giấy phép](#lưu-ý-về-giấy-phép).
+Dùng IP của máy đang chạy Docker, ví dụ `http://192.168.1.10:8000`. Xem [lưu ý về giấy phép](#lưu-ý-về-giấy-phép) trước khi mở cho người khác dùng.
 </details>
 
 ## Lưu ý về giấy phép
 
 - **Code của project này:** giấy phép [MIT](LICENSE). Bạn được tự do dùng, sửa và chia sẻ.
-- **vnstock:** **không** nằm trong repo này. Khi bạn build Docker hoặc `pip install`, máy của bạn tự tải vnstock theo [giấy phép riêng của vnstock](https://vnstocks.com/onboard/giay-phep-su-dung). Bản Cộng đồng miễn phí chỉ dành cho **cá nhân, học tập, nghiên cứu**. Theo giấy phép đó, hai việc sau **cần thoả thuận bằng văn bản với tác giả vnstock**, kể cả khi bạn không thu tiền:
-  - mở API này công khai để **người khác** lấy dữ liệu;
-  - đăng Docker image có sẵn vnstock lên Docker Hub hoặc kho image khác.
-
-  Vì vậy project chỉ hướng dẫn **mỗi người tự chạy trên máy mình, bằng tài khoản của mình**.
-- **Dữ liệu** thuộc về các nguồn (công ty chứng khoán, sở giao dịch). Không bán hay phân phối lại dữ liệu.
+- **vnstock:** **không** nằm trong repo này. Khi bạn build Docker hoặc `pip install`, máy của bạn tự tải vnstock theo [giấy phép riêng của vnstock](https://vnstocks.com/onboard/giay-phep-su-dung). Đọc kỹ giấy phép đó nếu bạn định mở API cho người khác dùng hoặc đăng Docker image có sẵn vnstock.
+- **Dữ liệu** thuộc về các nguồn (công ty chứng khoán, sở giao dịch) và đi theo điều khoản của khoá bạn đăng ký. Quyền dùng vnstock và quyền lấy dữ liệu là hai thứ riêng. Không bán hay phân phối lại dữ liệu.
 - **Không phải tư vấn đầu tư.** Dữ liệu có thể trễ hoặc sai. Bạn tự chịu trách nhiệm với quyết định của mình.
 
 ## Đóng góp

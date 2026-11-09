@@ -12,7 +12,7 @@ Chỉ bản mới nhất trên nhánh `main` được sửa lỗi bảo mật.
 
 ## Lời khuyên khi tự host
 
-- Giữ `VNSTOCK_API_KEY` trong `.env`, không commit và không chia sẻ.
+- Giữ khoá nguồn (`DNSE_API_KEY`, `DNSE_API_SECRET`...) trong `.env`, `chmod 600 .env`, không commit và không chia sẻ. `/status` chỉ cho biết đã có khoá hay chưa, không in giá trị.
 - Trên VPS, chỉ mở cổng cho localhost (`127.0.0.1:8000:8000`) và đặt reverse proxy có xác thực phía trước. Xem [docs/deploy.md](docs/deploy.md).
 - Nếu chỉ một website cần gọi API, đặt `CORS_ORIGINS` là đúng tên miền đó thay vì `*`.
 - Cập nhật thường xuyên: `git pull && docker compose up -d --build`.

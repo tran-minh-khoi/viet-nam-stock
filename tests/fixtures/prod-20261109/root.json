@@ -1,0 +1,1 @@
+{"service":"PDG Stock API","version":"1.0.0","endpoints":["/stock/{symbol}","/stock/{symbol}/recent?days=7","/stocks?symbols=PDR,VNM","/health"]}

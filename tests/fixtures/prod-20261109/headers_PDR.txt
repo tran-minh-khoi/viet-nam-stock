@@ -1,0 +1,7 @@
+HTTP/1.1 405 Method Not Allowed
+date: Mon, 09 Nov 2026 07:32:32 GMT
+server: uvicorn
+allow: GET
+content-length: 31
+content-type: application/json
+

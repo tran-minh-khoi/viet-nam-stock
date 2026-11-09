@@ -1,0 +1,2 @@
+{"detail":"Mã chứng khoán không hợp lệ"}
+400

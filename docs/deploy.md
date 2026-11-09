@@ -8,7 +8,7 @@ Có 3 cách. Nếu không chắc nên chọn cách nào, hãy dùng **Docker**.
 | [PM2 không dùng Docker](#vps-với-pm2-không-docker) | VPS đã có sẵn Python và PM2 |
 | [Railway hoặc nền tảng dùng Procfile](#railway--paas) | Không muốn tự quản lý server |
 
-> Dù chọn cách nào, đây là API **cho riêng bạn**. Mở công khai cho người khác lấy dữ liệu cần thoả thuận với tác giả vnstock, xem [vnstock-account.md](vnstock-account.md#giấy-phép-vnstock-tóm-tắt-cho-người-dùng-project-này).
+> Dù chọn cách nào, đây là API **cho riêng bạn**. Mở công khai cho người khác lấy dữ liệu cần thoả thuận với tác giả vnstock, xem [data-sources.md](data-sources.md#giấy-phép).
 
 ## Docker trên máy hoặc VPS
 
@@ -82,13 +82,15 @@ pm2 status
 pm2 logs viet-nam-stock
 ```
 
-Thông tin đăng nhập vnstock lưu ở `~/.vnstock` của user chạy PM2.
+Khoá nguồn đọc từ `.env` trong thư mục project (`start.sh` nạp file này). Trạng thái vnstock lưu ở `~/.vnstock` của user chạy PM2.
+
+Chạy **một** tiến trình: cache `/stock/*` và trần lượt gọi nguồn nằm trong tiến trình. Muốn nhiều tiến trình thì mỗi tiến trình có trần riêng, hãy chia nhỏ `BUDGET_PER_MINUTE`.
 
 ## Railway / PaaS
 
-Repo có sẵn `Procfile` và `runtime.txt`. Kết nối repo GitHub với Railway hoặc nền tảng tương tự là nền tảng tự build. Thêm biến môi trường `VNSTOCK_API_KEY` trong phần cài đặt nếu có.
+Repo có sẵn `Procfile` và `runtime.txt`. Kết nối repo GitHub với Railway hoặc nền tảng tương tự là nền tảng tự build. Thêm khoá nguồn (`DNSE_API_KEY`, `DNSE_API_SECRET`...) vào biến môi trường trong phần cài đặt.
 
-Lưu ý: nhiều nền tảng PaaS xoá ổ đĩa mỗi lần deploy, nên vnstock có thể coi mỗi lần deploy là một thiết bị mới. Nếu nền tảng hỗ trợ ổ đĩa lâu dài (volume), hãy gắn volume và đặt `VNSTOCK_HOME` trỏ vào đó.
+Lưu ý: nhiều nền tảng PaaS xoá ổ đĩa mỗi lần deploy. Nếu nền tảng hỗ trợ ổ đĩa lâu dài (volume), hãy gắn volume và đặt `VNSTOCK_HOME` trỏ vào đó để vnstock giữ trạng thái giữa các lần deploy.
 
 ## Chạy trực tiếp bằng Python (cho người phát triển)
 
