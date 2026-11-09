@@ -254,3 +254,78 @@ def test_clock_is_vietnam_time_even_on_a_utc_server(monkeypatch):
     finally:
         monkeypatch.delenv("TZ")
         time.tzset()
+
+
+# ---------------------------------------------------------------- production safety: always have the last good answer
+
+def test_empty_answer_for_a_known_symbol_keeps_the_last_good_data(fake, clock, client):
+    fake.bars["PDR"] = BARS
+    listed(fake, "PDR")
+    client.get("/stock/PDR")
+    engine.CACHE["PDR"]["fetched_at"] -= 3600
+    fake.bars["PDR"] = []                               # source hiccup: no sessions
+    assert client.get("/stock/PDR").status_code == 200
+    time.sleep(0.05)
+    r = client.get("/stock/PDR")
+    assert r.status_code == 200 and r.json()["todayDate"] == "2026-11-09"
+    assert "PDR" not in engine.NOT_FOUND
+
+
+def test_older_data_never_replaces_newer(fake, clock, client):
+    fake.bars["PDR"] = BARS
+    listed(fake, "PDR")
+    client.get("/stock/PDR")
+    engine.CACHE["PDR"]["fetched_at"] -= 3600
+    fake.bars["PDR"] = BARS[:-1]                        # source lags one session behind
+    client.get("/stock/PDR")
+    time.sleep(0.05)
+    assert engine.CACHE["PDR"]["sessions"][-1]["date"] == "2026-11-09"
+
+
+def test_throttled_source_backs_off_longer(fake, clock, client):
+    class RateLimitedError(Exception):
+        pass
+    fake.bars["PDR"] = BARS
+    listed(fake, "PDR")
+    client.get("/stock/PDR")
+    engine.CACHE["PDR"]["fetched_at"] -= 3600
+    fake.fail = RateLimitedError("Rate Limit Exceeded")
+    client.get("/stock/PDR")
+    time.sleep(0.05)
+    assert engine.RETRY_AFTER["PDR"] == engine.RETRY_AFTER_THROTTLE
+    engine.LAST_FAILURE["PDR"] -= 30                    # 30 s later: still waiting
+    assert not engine.may_retry("PDR")
+    engine.LAST_FAILURE["PDR"] -= engine.RETRY_AFTER_THROTTLE
+    assert engine.may_retry("PDR")
+    assert client.get("/stock/PDR").status_code == 200   # meanwhile users still get the last good data
+
+
+def test_snapshot_survives_a_restart_while_the_source_is_down(fake, clock, client, tmp_path):
+    path = str(tmp_path / "snapshot.json")
+    fake.bars["PDR"] = BARS
+    fake.trade["PDR"] = (11.45, clock.value - timedelta(seconds=10))
+    listed(fake, "PDR")
+    before = client.get("/stock/PDR").json()
+    engine.save_snapshot(path)
+
+    engine.reset()                                      # "restart": memory is gone
+    fake.fail = RuntimeError("DNSE down")
+    fake.calls.clear()
+    engine.load_snapshot(path)
+    assert engine.LISTING and "PDR" in engine.CACHE
+    after = client.get("/stock/PDR")
+    assert after.status_code == 200
+    assert {k: v for k, v in after.json().items() if k not in ("timestamp", "stale")} == \
+           {k: v for k, v in before.items() if k not in ("timestamp", "stale")}
+
+
+def test_snapshot_written_atomically_and_bad_file_ignored(tmp_path):
+    path = tmp_path / "snapshot.json"
+    engine.CACHE["PDR"] = {"sessions": BARS, "current_price": None, "fetched_at": time.time(), "failed_at": 0.0}
+    engine.save_snapshot(str(path))
+    assert json.loads(path.read_text(encoding="utf-8"))["entries"]["PDR"]["sessions"][-1]["close"] == 11.5
+    assert not (tmp_path / "snapshot.json.tmp").exists()
+    engine.reset()
+    path.write_text("{broken", encoding="utf-8")
+    engine.load_snapshot(str(path))                     # logs a warning, starts empty
+    assert engine.CACHE == {}

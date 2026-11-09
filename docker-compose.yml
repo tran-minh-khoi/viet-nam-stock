@@ -9,6 +9,9 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # Last good data survives restarts (on the vnstock-data volume)
+      SNAPSHOT_FILE: ${SNAPSHOT_FILE:-/data/snapshot.json}
     volumes:
       - vnstock-data:/data
 

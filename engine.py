@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 import time
 from collections import deque
@@ -31,6 +32,10 @@ TTL_NOT_FOUND = 3600
 HISTORY_CALENDAR_DAYS = 70       # enough for MAX_RECENT sessions + 1 reference session
 FIRST_FETCH_TIMEOUT = 12         # a first request for an uncached symbol waits at most this long
 RETRY_AFTER_FAILURE = 15         # after a failed refresh, wait this long before trying again
+RETRY_AFTER_THROTTLE = 120       # ...and this long when the source said "too many requests" / quota
+THROTTLE_ERRORS = {"RateLimitedError", "RateLimitError", "EntitlementError", "AccessDeniedError",
+                   "PolicyError", "DataSourceBlockedError"}
+SNAPSHOT_EVERY = 30              # seconds between snapshot writes (only when something changed)
 LISTED_TRADE_MAX_AGE = 600       # a last trade older than this is not "current"
 LISTING_REFRESH_SECONDS = 24 * 3600
 
@@ -90,10 +95,51 @@ CACHE: Dict[str, dict] = {}            # symbol -> {"sessions", "current_price",
 NOT_FOUND: Dict[str, float] = {}       # symbol -> when the source said it has no data
 IN_FLIGHT: Dict[str, asyncio.Task] = {}
 LAST_FAILURE: Dict[str, float] = {}   # symbol -> last failed refresh, also for symbols not cached yet
+RETRY_AFTER: Dict[str, float] = {}    # symbol -> seconds to wait after LAST_FAILURE
 LISTING: Dict[str, dict] = {}          # symbol -> {"name", "nameEn", "exchange", "type"}
 LISTING_LOADED_AT = 0.0
 NAME_OVERRIDES: Dict[str, dict] = {}
 STARTED_AT = time.time()
+
+
+_snapshot_state = {"dirty": False, "written_at": 0.0}
+
+
+def save_snapshot(path: str):
+    """Write the cache + symbol list to `path` atomically, so a restart can answer at once."""
+    if not path:
+        return
+    payload = {"saved_at": time.time(), "listing": LISTING, "listing_loaded_at": LISTING_LOADED_AT,
+               "entries": {s: {k: e[k] for k in ("sessions", "current_price", "fetched_at")} for s, e in CACHE.items()}}
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+        _snapshot_state.update(dirty=False, written_at=time.time())
+    except Exception as exc:
+        logger.warning("cannot write snapshot %s: %s", path, exc)
+
+
+def load_snapshot(path: str):
+    """Restore the last good data written by save_snapshot. Entries keep their real age, so they are
+    answered right away (stale if old) and refreshed in the background as usual."""
+    global LISTING, LISTING_LOADED_AT
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+        for symbol, entry in (payload.get("entries") or {}).items():
+            if entry.get("sessions"):
+                CACHE[symbol] = {**entry, "failed_at": 0.0}
+        if payload.get("listing"):
+            LISTING = payload["listing"]
+            LISTING_LOADED_AT = float(payload.get("listing_loaded_at") or 0.0)
+        logger.info("snapshot restored: %d symbols, %d listed, saved %ds ago", len(CACHE), len(LISTING),
+                    int(time.time() - float(payload.get("saved_at") or time.time())))
+    except Exception as exc:
+        logger.warning("cannot read snapshot %s: %s", path, exc)
 
 
 def load_name_overrides(path: str):
@@ -115,6 +161,8 @@ def reset():
     NOT_FOUND.clear()
     IN_FLIGHT.clear()
     LAST_FAILURE.clear()
+    RETRY_AFTER.clear()
+    _snapshot_state["dirty"] = False
     LISTING = {}
     LISTING_LOADED_AT = 0.0
     budget.calls.clear()
@@ -170,23 +218,45 @@ async def run_upstream(func, *args):
 
 # ---------------------------------------------------------------- cache
 
+class SuspiciousData(Exception):
+    """The source answered, but with data we would rather not replace a good copy with."""
+
+
+def _record_failure(symbol: str, exc: Exception):
+    kinds = {c.__name__ for c in type(exc).__mro__}
+    LAST_FAILURE[symbol] = time.time()
+    RETRY_AFTER[symbol] = RETRY_AFTER_THROTTLE if kinds & THROTTLE_ERRORS else RETRY_AFTER_FAILURE
+    if symbol in CACHE:
+        CACHE[symbol]["failed_at"] = time.time()
+
+
+def may_retry(symbol: str) -> bool:
+    return time.time() - LAST_FAILURE.get(symbol, 0) > RETRY_AFTER.get(symbol, RETRY_AFTER_FAILURE)
+
+
 async def _refresh(symbol: str):
     try:
         data = await run_upstream(fetch_symbol, symbol, is_trading_time())
+        known = CACHE.get(symbol)
         if data is None:
+            if known:
+                # A symbol we have good data for does not vanish: treat an empty answer as a hiccup
+                raise SuspiciousData("source returned no sessions for a known symbol")
             NOT_FOUND[symbol] = time.time()
-            CACHE.pop(symbol, None)
             return
+        if known and data["sessions"][-1]["date"] < known["sessions"][-1]["date"]:
+            raise SuspiciousData(f"source went back to {data['sessions'][-1]['date']}, "
+                                 f"keeping {known['sessions'][-1]['date']}")
         NOT_FOUND.pop(symbol, None)
         LAST_FAILURE.pop(symbol, None)
+        RETRY_AFTER.pop(symbol, None)
         data["fetched_at"] = time.time()
         data["failed_at"] = 0.0
         CACHE[symbol] = data
+        _snapshot_state["dirty"] = True
     except Exception as exc:
         logger.warning("refresh %s failed: %s: %s", symbol, type(exc).__name__, str(exc).splitlines()[0] if str(exc) else "")
-        LAST_FAILURE[symbol] = time.time()
-        if symbol in CACHE:
-            CACHE[symbol]["failed_at"] = time.time()
+        _record_failure(symbol, exc)
         raise
     finally:
         IN_FLIGHT.pop(symbol, None)
@@ -224,7 +294,7 @@ def validate_symbol(raw: str) -> str:
 async def get_entry(symbol: str) -> dict:
     entry = CACHE.get(symbol)
     if entry:
-        if not is_fresh(symbol, entry) and time.time() - entry.get("failed_at", 0) > RETRY_AFTER_FAILURE:
+        if not is_fresh(symbol, entry) and may_retry(symbol):
             start_refresh(symbol)
         return entry
 
@@ -391,6 +461,7 @@ async def load_listing():
                                        "exchange": info["exchange"], "type": info.get("type")}
             LISTING = listing
             LISTING_LOADED_AT = time.time()
+            _snapshot_state["dirty"] = True
             logger.info("symbol list loaded: %d symbols", len(listing))
     except Exception as exc:
         logger.warning("loading symbol list failed: %s: %s", type(exc).__name__, str(exc).splitlines()[0] if str(exc) else "")
@@ -406,10 +477,12 @@ async def _background_loop_impl():
                 await load_listing()
             for symbol in settings.PRIORITY_SYMBOLS:
                 entry = CACHE.get(symbol)
-                if stamp - LAST_FAILURE.get(symbol, 0) <= RETRY_AFTER_FAILURE:
+                if not may_retry(symbol):
                     continue
                 if entry is None or not is_fresh(symbol, entry):
                     start_refresh(symbol)
+            if _snapshot_state["dirty"] and stamp - _snapshot_state["written_at"] > SNAPSHOT_EVERY:
+                await asyncio.get_running_loop().run_in_executor(None, save_snapshot, settings.SNAPSHOT_FILE)
         except Exception:
             logger.exception("background loop error")
         await asyncio.sleep(3)

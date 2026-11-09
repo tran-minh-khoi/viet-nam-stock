@@ -5,3 +5,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# runtime data (SNAPSHOT_FILE)
+/state

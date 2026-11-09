@@ -57,6 +57,9 @@ class Settings:
     # Optional JSON file {"SYMBOL": {"name", "nameEn", "exchange"}} that wins over the source's names,
     # to keep names identical when you switch sources
     NAMES_FILE: str = os.getenv("NAMES_FILE", "")
+    # Optional JSON file where the last good data of every cached symbol (+ the symbol list) is kept,
+    # so a restart answers at once even if the source is down. Written at most every 30 s.
+    SNAPSHOT_FILE: str = os.getenv("SNAPSHOT_FILE", "")
     # Seconds a cached symbol counts as fresh
     TTL_TRADING_PRIORITY: int = int(os.getenv("TTL_TRADING_PRIORITY", "20"))
     TTL_TRADING: int = int(os.getenv("TTL_TRADING", "30"))

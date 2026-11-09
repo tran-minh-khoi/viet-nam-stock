@@ -2,6 +2,16 @@
 
 Định dạng theo [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/), đánh số phiên bản theo [SemVer](https://semver.org/lang/vi/).
 
+## [4.1.0] - 2026-11-09
+
+### Thêm
+- `SNAPSHOT_FILE`: lưu dữ liệu tốt gần nhất của mọi mã đang giữ và danh mục mã xuống đĩa (ghi nguyên tử, tối đa 30 giây một lần, và khi tắt). Khởi động lại thì trả ngay bản đã lưu, kể cả khi nguồn đang lỗi. Docker mặc định lưu ở `/data/snapshot.json` trong volume.
+
+### Sửa
+- Nguồn trả rỗng cho một mã đang có dữ liệu không còn làm mã đó báo 404 suốt 1 giờ: coi là lỗi tạm thời, giữ bản cũ.
+- Nguồn trả dữ liệu cũ hơn bản đang giữ (phiên mới nhất lùi lại) thì bỏ qua, giữ bản mới hơn.
+- Nguồn báo vượt hạn mức (429, hết quota, không đủ quyền) thì đợi 120 giây mới thử lại thay vì 15 giây; người dùng vẫn nhận bản tốt gần nhất trong lúc đó.
+
 ## [4.0.0] - 2026-11-09
 
 ### Thay đổi lớn

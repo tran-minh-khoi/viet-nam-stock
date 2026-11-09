@@ -24,7 +24,7 @@ try:
 except ImportError:  # pragma: no cover
     redis = None
 
-__version__ = "4.0.0"
+__version__ = "4.1.0"
 SERVICE_NAME = os.getenv("SERVICE_NAME", "Vietnam Stock API")
 
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -159,11 +159,13 @@ def cache_headers(response: Response):
 @asynccontextmanager
 async def lifespan(_app):
     engine.load_name_overrides(settings.NAMES_FILE)
+    engine.load_snapshot(settings.SNAPSHOT_FILE)
     task = asyncio.create_task(engine.background_loop())
     logger.info("vnstock 6, sources: data=%s quote=%s company=%s index=%s",
                 settings.DATA_SOURCE, settings.QUOTE_SOURCE, settings.COMPANY_SOURCE, settings.INDEX_SOURCE)
     yield
     task.cancel()
+    engine.save_snapshot(settings.SNAPSHOT_FILE)
 
 
 docs = {} if settings.ENABLE_DOCS else {"docs_url": None, "redoc_url": None, "openapi_url": None}

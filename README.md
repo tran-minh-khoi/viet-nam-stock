@@ -41,6 +41,7 @@ Xây trên [vnstock thế hệ 6](https://vnstocks.com/docs/vnstock/v6): bạn c
 
 Ngoài ra:
 - **Không bao giờ bắt người dùng chờ nguồn:** `/stock/*` giữ dữ liệu từng mã trong bộ nhớ, hết hạn vẫn trả ngay rồi làm mới ở nền. Mã ưu tiên (`PRIORITY_SYMBOLS`) được làm mới định kỳ kể cả khi không ai gọi.
+- **Luôn có bản tốt gần nhất:** nguồn chậm, lỗi, trả rỗng, trả dữ liệu cũ hơn hay báo vượt hạn mức đều không làm mất dữ liệu đang có; vượt hạn mức thì tự giãn thời gian thử lại. Bật `SNAPSHOT_FILE` để giữ cả qua lần khởi động lại.
 - **Bảo vệ khoá của bạn:** tự đặt trần số lượt gọi nguồn mỗi phút (`BUDGET_PER_MINUTE`). 100 người cùng xem VCB vẫn chỉ tốn 1 lượt gọi.
 - **Báo lỗi dễ hiểu:** thiếu khoá 403, nguồn giới hạn tốc độ 429, sai mã 404, nguồn lỗi 503, kèm `hint` tiếng Việt.
 - **Trang thử API** tại `/docs`: bấm và xem kết quả, không cần viết code.
@@ -185,6 +186,7 @@ Copy `.env.example` thành `.env` rồi sửa. Ngoài khoá nguồn, mọi dòng
 | `PRIORITY_SYMBOLS` | *(trống)* | Mã luôn được làm mới ở nền, ví dụ `VCB,FPT` |
 | `SHORT_NAMES` | *(trống)* | Tên ngắn thay cho `name`, ví dụ `"VCB=Vietcombank;FPT=FPT"` |
 | `NAMES_FILE` | *(trống)* | File JSON tên công ty dùng thay tên của nguồn (giữ tên không đổi khi đổi nguồn) |
+| `SNAPSHOT_FILE` | *(trống)* | File lưu dữ liệu tốt gần nhất, ví dụ `state/snapshot.json`: khởi động lại vẫn trả ngay kể cả khi nguồn đang lỗi |
 | `PORT` | `8000` | Cổng trên máy bạn (Docker) |
 | `CORS_ORIGINS` | `*` | Các website được gọi API từ trình duyệt, cách nhau bằng dấu phẩy |
 | `ENABLE_DOCS` | `true` | Bật trang `/docs` |
