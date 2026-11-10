@@ -1,7 +1,6 @@
-"""Shared fakes: vnstock is never called, no network, no key needed."""
+"""Shared fakes: DNSE is never called, no network, no key needed."""
 from datetime import datetime
 
-import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,7 +15,8 @@ class FakeSource:
 
     def __init__(self):
         self.bars = {}        # symbol -> [{"date","open","high","low","close","volume"}]
-        self.trade = {}       # symbol -> (price, datetime)
+        self.trade = {}       # symbol -> (price, datetime): last match, same session as the bar of that day
+        self.today = {}       # symbol -> (bar, datetime): last trade of a session not in the daily bars yet
         self.listing = {}     # symbol -> {"name","nameEn","exchange","type"}
         self.calls = []
         self.fail = None      # exception to raise from daily_bars
@@ -27,9 +27,16 @@ class FakeSource:
             raise self.fail
         return [b for b in self.bars.get(symbol, []) if start <= b["date"] <= end]
 
-    def last_trade(self, symbol):
-        self.calls.append(("last_trade", symbol))
-        return self.trade.get(symbol)
+    def latest_trade(self, symbol):
+        self.calls.append(("latest_trade", symbol))
+        if symbol in self.today:
+            bar, at = self.today[symbol]
+            return {**bar, "at": at}
+        if symbol in self.trade:
+            price, at = self.trade[symbol]
+            return {"date": at.strftime("%Y-%m-%d"), "open": price, "high": price, "low": price,
+                    "close": price, "volume": 0, "at": at}
+        return None
 
     def get_listing(self):
         self.calls.append(("listing", None))
@@ -40,7 +47,7 @@ class FakeSource:
 def fake(monkeypatch):
     src = FakeSource()
     monkeypatch.setattr(sources, "daily_bars", src.daily_bars)
-    monkeypatch.setattr(sources, "last_trade", src.last_trade)
+    monkeypatch.setattr(sources, "latest_trade", src.latest_trade)
     monkeypatch.setattr(sources, "listing", src.get_listing)
     return src
 
@@ -64,7 +71,6 @@ def clean_state(monkeypatch):
     engine.reset()
     engine.NAME_OVERRIDES = {}
     api.MEMORY_CACHE.clear()
-    monkeypatch.setattr(api, "REDIS_CLIENT", None)
     monkeypatch.setattr(settings, "PRIORITY_SYMBOLS", ["PDR"])
     monkeypatch.setattr(settings, "SHORT_NAMES", {"PDR": "PHÁT ĐẠT"})
     monkeypatch.setattr(settings, "MAX_RECENT", 30)
@@ -83,10 +89,26 @@ def client():
         yield c
 
 
-def frame(rows, tz=True):
-    df = pd.DataFrame(rows)
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"])
-        if tz:
-            df["time"] = df["time"].dt.tz_localize("Asia/Ho_Chi_Minh")
-    return df
+class FakeDnse:
+    """Stands in for dnse.client(): answers by path from .responses, records every call."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+        self.limits = {}
+
+    def get(self, path, params=None):
+        self.calls.append((path, dict(params or {})))
+        answer = self.responses[path]
+        return answer(params or {}) if callable(answer) else answer
+
+
+@pytest.fixture
+def fake_dnse(monkeypatch):
+    import dnse
+
+    def install(responses):
+        client = FakeDnse(responses)
+        monkeypatch.setattr(dnse, "client", lambda: client)
+        return client
+    return install

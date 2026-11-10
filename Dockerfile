@@ -3,17 +3,16 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    VNSTOCK_HOME=/data/vnstock
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY api.py config.py engine.py sources.py ./
+COPY api.py config.py dnse.py engine.py sources.py ./
 
-# Run as a normal user; /data keeps vnstock state (device id, source sessions) across restarts
-RUN useradd --create-home --uid 1000 app && mkdir -p /data/vnstock && chown -R app /data
+# Run as a normal user; /data keeps the snapshot (last good data) across restarts
+RUN useradd --create-home --uid 1000 app && mkdir -p /data && chown -R app /data
 USER app
 VOLUME /data
 

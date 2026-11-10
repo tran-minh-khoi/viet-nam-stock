@@ -10,5 +10,5 @@ labels: enhancement
 **Tình huống dùng**
 <!-- Bạn sẽ dùng nó vào việc gì -->
 
-**Chức năng vnstock liên quan (nếu biết)**
+**Endpoint DNSE liên quan (nếu biết)**
 <!-- Ví dụ: Market().equity(sym).foreign_flow() -->

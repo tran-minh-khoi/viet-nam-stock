@@ -1,10 +1,10 @@
 """In-memory engine behind /stock/{symbol}, /stock/{symbol}/recent and /stocks.
 
 A user request never waits for the data source once a symbol is cached:
-- each symbol's daily sessions (+ last trade during market hours) are kept in memory;
+- each symbol's daily sessions (+ today's session from the last trade) are kept in memory;
 - a stale entry is still answered right away and refreshed in the background;
 - PRIORITY_SYMBOLS are refreshed on a timer even when nobody asks;
-- UpstreamBudget caps calls per minute so a burst cannot get the source key throttled.
+- UpstreamBudget caps calls per minute so a burst cannot use up the DNSE key's limits.
 
 Run ONE worker: cache and budget live in the process.
 """
@@ -33,11 +33,11 @@ HISTORY_CALENDAR_DAYS = 70       # enough for MAX_RECENT sessions + 1 reference 
 FIRST_FETCH_TIMEOUT = 12         # a first request for an uncached symbol waits at most this long
 RETRY_AFTER_FAILURE = 15         # after a failed refresh, wait this long before trying again
 RETRY_AFTER_THROTTLE = 120       # ...and this long when the source said "too many requests" / quota
-THROTTLE_ERRORS = {"RateLimitedError", "RateLimitError", "EntitlementError", "AccessDeniedError",
-                   "PolicyError", "DataSourceBlockedError"}
+THROTTLE_ERRORS = {"RateLimited", "QuotaExceeded", "AuthFailed", "NotConfigured"}
 SNAPSHOT_EVERY = 30              # seconds between snapshot writes (only when something changed)
 LISTED_TRADE_MAX_AGE = 600       # a last trade older than this is not "current"
 LISTING_REFRESH_SECONDS = 24 * 3600
+LISTING_COST = 25                # ~2,100 instruments / 100 per page
 
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{3,8}$")
 PRICE_BAND = {"HOSE": 0.07, "HNX": 0.10, "UPCOM": 0.15}
@@ -148,7 +148,10 @@ def load_name_overrides(path: str):
         return
     try:
         with open(path, encoding="utf-8") as fh:
-            NAME_OVERRIDES = {k.upper(): v for k, v in json.load(fh).items()}
+            raw = json.load(fh)
+        # Only text values: a NaN written by a pandas export would break every JSON answer
+        NAME_OVERRIDES = {k.upper(): {f: x for f, x in v.items() if isinstance(x, str) and x.strip()}
+                          for k, v in raw.items() if isinstance(v, dict)}
         logger.info("name overrides: %d symbols from %s", len(NAME_OVERRIDES), path)
     except Exception as exc:
         logger.warning("cannot read NAMES_FILE %s: %s", path, exc)
@@ -175,14 +178,17 @@ def ttl_for(symbol: str) -> int:
 
 
 def fetch_cost() -> int:
-    # During market hours the last trade is fetched too, for the current price
-    return 2 if is_trading_time() else 1
+    return 2   # daily history + last trade
 
 
 # ---------------------------------------------------------------- upstream (worker threads)
 
 def fetch_symbol(symbol: str, with_trade: bool) -> Optional[dict]:
-    """Daily sessions (+ last trade price). None if the source has no data for the symbol."""
+    """Daily sessions + today's session from the last trade. None if DNSE has no data for the symbol.
+
+    DNSE adds a session's daily bar only after it ends, so while it runs (and for a while after
+    the close) today's open/high/low/volume and the current price come from the last trade.
+    """
     end = now()
     start = end - timedelta(days=HISTORY_CALENDAR_DAYS)
     sessions = sources.daily_bars(symbol, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
@@ -190,21 +196,24 @@ def fetch_symbol(symbol: str, with_trade: bool) -> Optional[dict]:
         return None
 
     current_price = None
-    if with_trade:
-        try:
-            trade = sources.last_trade(symbol)
-            if trade is not None:
-                price, at = trade
-                if at is None or (now() - at).total_seconds() <= LISTED_TRADE_MAX_AGE:
-                    current_price = price
-        except Exception as exc:
-            logger.warning("last trade %s failed: %s", symbol, exc)
+    try:
+        trade = sources.latest_trade(symbol)
+    except Exception as exc:
+        trade = None
+        logger.warning("last trade %s failed: %s", symbol, exc)
+    if trade is not None:
+        at = trade.pop("at")
+        if trade["date"] > sessions[-1]["date"] and trade["date"] == end.strftime("%Y-%m-%d"):
+            sessions.append(trade)
+        if with_trade and trade["date"] == sessions[-1]["date"] and \
+                (end - at).total_seconds() <= LISTED_TRADE_MAX_AGE:
+            current_price = trade["close"]
 
     return {"sessions": sessions, "current_price": current_price}
 
 
 async def run_upstream(func, *args):
-    """Run a vnstock call in a worker thread; SystemExit from a library never kills the API."""
+    """Run a blocking DNSE call in a worker thread; SystemExit from a library never kills the API."""
     loop = asyncio.get_running_loop()
 
     def guarded():
@@ -449,7 +458,7 @@ def build_recent(symbol: str, entry: dict, days: int) -> dict:
 
 async def load_listing():
     global LISTING, LISTING_LOADED_AT
-    if not budget.take(2, True):   # stocks + ETFs
+    if not budget.take(LISTING_COST, True):   # instruments come in pages of 100
         return
     try:
         listing = await run_upstream(sources.listing)

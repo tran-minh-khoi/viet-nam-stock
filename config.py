@@ -32,21 +32,10 @@ class Settings:
     ENABLE_DOCS: bool = _bool("ENABLE_DOCS", True)
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
-    # ── Data sources (vnstock 6) ──────────────────────────────────────
-    # Each source needs its own key, issued by that broker. See docs/vnstock-account.md.
-    # Prices, trade tape, symbol list, index candles, foreign flow:
-    DATA_SOURCE: str = os.getenv("DATA_SOURCE", "dnse").lower()
-    # Price board with 3 bid/ask levels (/quote, /quotes): fhsc or tcbs, or dnse (built from its order book)
-    QUOTE_SOURCE: str = os.getenv("QUOTE_SOURCE", "dnse").lower()
-    # Company profile, shareholders, financial statements: only fhsc has these
-    COMPANY_SOURCE: str = os.getenv("COMPANY_SOURCE", "fhsc").lower()
-    # Index list/members and symbol groups (VN30, HNX30...): only ssi has members/groups
-    INDEX_SOURCE: str = os.getenv("INDEX_SOURCE", "ssi").lower()
-
     # ── Upstream budget ───────────────────────────────────────────────
-    # Calls per minute this API allows itself across all sources, so a burst of users
-    # cannot get your key throttled. Part of it is kept for PRIORITY_SYMBOLS.
-    BUDGET_PER_MINUTE: int = int(os.getenv("BUDGET_PER_MINUTE", "30"))
+    # DNSE calls per minute this API allows itself, so a burst of users cannot use up the key's
+    # hourly/daily limits. Part of it is kept for PRIORITY_SYMBOLS.
+    BUDGET_PER_MINUTE: int = int(os.getenv("BUDGET_PER_MINUTE", "60"))
     BUDGET_RESERVED_FOR_PRIORITY: int = int(os.getenv("BUDGET_RESERVED_FOR_PRIORITY", "6"))
 
     # ── /stock/* engine ───────────────────────────────────────────────
@@ -54,8 +43,8 @@ class Settings:
     PRIORITY_SYMBOLS: List[str] = _list("PRIORITY_SYMBOLS")
     # Short display names that replace "name" in /stock/* ("fullName" keeps the listed name)
     SHORT_NAMES: Dict[str, str] = _pairs("SHORT_NAMES")
-    # Optional JSON file {"SYMBOL": {"name", "nameEn", "exchange"}} that wins over the source's names,
-    # to keep names identical when you switch sources
+    # Optional JSON file {"SYMBOL": {"name", "nameEn", "exchange"}} that wins over DNSE's names
+    # (DNSE has no English names)
     NAMES_FILE: str = os.getenv("NAMES_FILE", "")
     # Optional JSON file where the last good data of every cached symbol (+ the symbol list) is kept,
     # so a restart answers at once even if the source is down. Written at most every 30 s.
@@ -70,10 +59,7 @@ class Settings:
     # ── Cache for the other endpoints (seconds) ───────────────────────
     CACHE_TTL: int = int(os.getenv("CACHE_TTL", "15"))
     CACHE_TTL_HISTORY: int = int(os.getenv("CACHE_TTL_HISTORY", "300"))
-    CACHE_TTL_REFERENCE: int = int(os.getenv("CACHE_TTL_REFERENCE", "86400"))
-    CACHE_NAMESPACE: str = os.getenv("CACHE_NAMESPACE", "stock_api")
-    # Optional. Without Redis the cache lives in memory (lost on restart).
-    REDIS_URL: str = os.getenv("REDIS_URL", "")
+    CACHE_TTL_REFERENCE: int = int(os.getenv("CACHE_TTL_REFERENCE", "3600"))
 
 
 settings = Settings()

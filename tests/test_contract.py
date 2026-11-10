@@ -1,6 +1,6 @@
 """The answers of /stock/* must stay byte-for-byte what apps already read.
 
-tests/fixtures/prod-20261109 holds real responses of the previous service (vnstock 3, KBS)
+tests/fixtures/prod-20261109 holds real responses of the service the mobile app used before (vnstock 3, KBS)
 captured on 2026-11-09 during market hours. Each test rebuilds the same market data,
 feeds it to this service and compares every field. Only fields that depend on when the
 request ran (timestamp, lastUpdated, stale) are left out.

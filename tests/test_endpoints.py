@@ -1,29 +1,53 @@
-"""The other endpoints: caching, JSON safety, error mapping."""
-import pandas as pd
+"""The other endpoints: caching, DNSE answers -> JSON, error mapping."""
+import httpx
 import pytest
 
 import api
+import dnse
 import engine
 import sources
 from config import settings
-from tests.conftest import frame
+
+SECDEF = [{"marketId": "STO", "boardId": "G4", "basicPrice": 11.6, "ceilingPrice": 12.4, "floorPrice": 10.8,
+           "securityStatus": "NO_HALT", "time": "2026-11-10 08:00:27.155"},
+          {"marketId": "STO", "boardId": "G1", "basicPrice": 11.6, "ceilingPrice": 12.4, "floorPrice": 10.8,
+           "securityStatus": "NO_HALT", "time": "2026-11-10 08:00:27.145"}]
+QUOTES = {"quotes": [
+    {"boardId": "G1", "marketId": "STO", "time": "2026-11-10 10:54:20.320",
+     "bid": [{"price": 11.75, "quantity": 10840}, {"price": 11.7, "quantity": 9630}],
+     "offer": [{"price": 11.8, "quantity": 18510}]},
+    {"boardId": "G4", "marketId": "STO", "time": "2026-11-10 10:52:47.673",
+     "bid": [{"price": 11.75, "quantity": 49}], "offer": []}]}
 
 
-def test_history_is_json_safe_and_cached(client, clock, monkeypatch):
-    calls = []
-
-    def fake_ohlcv(kind, symbol, start, end, interval, limit):
-        calls.append((kind, symbol))
-        return frame([{"time": "2026-11-06 07:00", "open": 11.8, "high": 11.9, "low": 11.6, "close": 11.75, "volume": 1}])
-    monkeypatch.setattr(sources, "ohlcv", fake_ohlcv)
+def test_history_is_cached_and_daily_times_are_dates(client, clock, fake_dnse):
+    dnse_ = fake_dnse({"/price/ohlc": {"t": [1794189600], "o": [11.75], "h": [11.9], "l": [11.45],
+                                       "c": [11.6], "v": [5237000]}})
     a = client.get("/stock/pdr/history?interval=1D").json()
     b = client.get("/stock/PDR/history?interval=1D").json()
-    assert a == b and a["data"][0]["time"] == "2026-11-06" and calls == [("equity", "PDR")]
-    assert client.get("/index/vnindex/history").json()["symbol"] == "VNINDEX"
+    assert a == b == {"symbol": "PDR", "interval": "1D", "count": 1, "data": [
+        {"time": "2026-11-09", "open": 11.75, "high": 11.9, "low": 11.45, "close": 11.6, "volume": 5237000}]}
+    assert len(dnse_.calls) == 1
+
+
+def test_intraday_history_and_index_names(client, clock, fake_dnse):
+    dnse_ = fake_dnse({"/price/ohlc": {"t": [1794282600], "o": [1700.0], "h": [1701.0], "l": [1699.0],
+                                       "c": [1700.5], "v": [95600]}})
+    body = client.get("/index/hnxindex/history?interval=1m&start=2026-11-10").json()
+    assert body["symbol"] == "HNXINDEX" and body["data"][0]["time"] == "2026-11-10T10:50:00"
+    assert dnse_.calls[0][1]["symbol"] == "HNX" and dnse_.calls[0][1]["type"] == "INDEX"
+    assert dnse_.calls[0][1]["resolution"] == "1"
+
+
+def test_history_limit_keeps_the_newest(client, clock, fake_dnse):
+    fake_dnse({"/price/ohlc": {"t": [1793844000, 1793930400, 1794189600], "o": [1, 2, 3], "h": [1, 2, 3],
+                               "l": [1, 2, 3], "c": [1, 2, 3], "v": [1, 2, 3]}})
+    body = client.get("/stock/PDR/history?limit=2").json()
+    assert [c["close"] for c in body["data"]] == [2, 3]
 
 
 def test_history_rejects_bad_interval(client):
-    assert client.get("/stock/PDR/history?interval=7X").status_code == 422
+    assert client.get("/stock/PDR/history?interval=1M").status_code == 422
 
 
 def test_day_range_uses_exchange_band(client, clock, monkeypatch):
@@ -37,101 +61,82 @@ def test_day_range_uses_exchange_band(client, clock, monkeypatch):
     assert client.get("/stock/SHS/day-range?start_date=06-11-2026&end_date=2026-11-06").status_code == 400
 
 
-def test_dnse_quote_combines_limits_and_order_book(client, monkeypatch):
-    monkeypatch.setattr(settings, "QUOTE_SOURCE", "dnse")
-    monkeypatch.setattr(sources, "price_limits", lambda symbol: pd.DataFrame([
-        {"trading_date": "2026-11-09", "symbol": "PDR", "exchange": "HSX", "board": "T1",
-         "reference_price": 1, "ceiling_price": 1, "floor_price": 1},
-        {"trading_date": "2026-11-09", "symbol": "PDR", "exchange": "HSX", "board": "G1",
-         "reference_price": 11.75, "ceiling_price": 12.55, "floor_price": 10.95}]))
-    monkeypatch.setattr(sources, "order_book", lambda s: pd.DataFrame([
-        {"bid_price_1": 11.45, "bid_vol_1": 1000, "ask_price_1": 11.5, "ask_vol_1": pd.NA}]))
+def test_quote_has_official_limits_and_round_lot_book(client, fake_dnse):
+    fake_dnse({"/price/PDR/secdef": SECDEF, "/price/PDR/quotes/latest": QUOTES})
     q = client.get("/stock/PDR/quote").json()
-    assert q["exchange"] == "HOSE" and q["ceiling_price"] == 12.55 and q["bid_price_1"] == 11.45
-    assert q["ask_vol_1"] is None
+    assert q == {"symbol": "PDR", "exchange": "HOSE", "trading_date": "2026-11-10",
+                 "reference_price": 11.6, "ceiling_price": 12.4, "floor_price": 10.8, "status": "NO_HALT",
+                 "bid": [{"price": 11.75, "volume": 108400}, {"price": 11.7, "volume": 96300}],
+                 "ask": [{"price": 11.8, "volume": 185100}], "time": "2026-11-10T10:54:20"}
     assert client.get("/quotes?symbols=PDR").json()["count"] == 1
 
 
-class CredentialError(Exception):
-    pass
+def test_quote_unknown_symbol_is_404(client, fake_dnse):
+    fake_dnse({"/price/XYZ/secdef": [], "/price/XYZ/quotes/latest": {"quotes": []}})
+    assert client.get("/stock/XYZ/quote").status_code == 404
 
 
-class RateLimitedError(Exception):
-    pass
+def test_foreign_flow_one_call_per_weekday(client, fake_dnse):
+    row = {"totalBuyVolume": 594000, "totalSellVolume": 260500, "totalBuyTradedAmount": 7011200000,
+           "totalSellTradedAmount": 3074775000, "foreignerBuyPossibleQuantity": 49890000}
+    dnse_ = fake_dnse({"/price/PDR/foreign-trading": {"foreigners": [row]}})
+    body = client.get("/stock/PDR/foreign-flow?start=2026-11-06&end=2026-11-09").json()
+    assert [d["date"] for d in body["data"]] == ["2026-11-06", "2026-11-09"]      # weekend skipped
+    assert body["data"][0] | {} == {**body["data"][0], "net_volume": 333500, "net_value": 3936425000}
+    assert len(dnse_.calls) == 2 and dnse_.calls[0][1]["limit"] == 1
 
 
-class NetworkError(Exception):
-    pass
+def test_symbols_come_from_the_listing(client):
+    engine.LISTING = {"VNM": {"name": "Vinamilk", "nameEn": None, "exchange": "HOSE", "type": "stock"},
+                      "PDR": {"name": "Phát Đạt", "nameEn": None, "exchange": "HOSE", "type": "stock"}}
+    body = client.get("/symbols").json()
+    assert body["count"] == 2 and body["data"][0]["symbol"] == "PDR"
 
 
 @pytest.mark.parametrize("exc, status, hint_part", [
-    (CredentialError("Chưa có khoá: FHSC_API_KEY (code=VNSTOCK_CREDENTIAL_MISSING, source=fhsc)"), 403, "nguồn fhsc. Đặt FHSC_API_KEY"),
-    (RateLimitedError("slow down"), 429, "giới hạn tốc độ"),
-    (NetworkError("timeout"), 503, "không truy cập được"),
+    (dnse.NotConfigured("DNSE_API_KEY / DNSE_API_SECRET chưa được đặt"), 503, "DNSE_API_KEY"),
+    (dnse.AuthFailed("DNSE 401: bad signature"), 503, "đồng hồ server"),
+    (dnse.RateLimited("DNSE 429: Rate Limit Exceeded"), 429, "theo giờ"),
+    (dnse.QuotaExceeded("DNSE 403: OA-401"), 429, "trong ngày"),
+    (dnse.DnseError("DNSE 500: internal"), 503, "thử lại sau"),
 ])
-def test_vnstock_errors_map_to_http(client, monkeypatch, exc, status, hint_part):
+def test_dnse_errors_map_to_http(client, monkeypatch, exc, status, hint_part):
     def boom(*_):
         raise exc
-    monkeypatch.setattr(sources, "company", boom)
-    r = client.get("/stock/PDR/company")
+    monkeypatch.setattr(sources, "candles", boom)
+    r = client.get("/stock/PDR/history")
     assert r.status_code == status
     assert r.json()["detail"] == str(exc) and hint_part in r.json()["hint"]
 
 
 def test_unexpected_error_is_500_without_details(client, monkeypatch):
-    monkeypatch.setattr(sources, "company", lambda *_: {}["boom"])
-    r = client.get("/stock/PDR/company")
-    assert r.status_code == 500 and r.json() == {"detail": "Lỗi nội bộ server."}
+    monkeypatch.setattr(sources, "candles", lambda *_: {}["boom"])
+    r = client.get("/stock/PDR/history")
+    assert r.status_code == 500 and "boom" not in r.text
 
 
-def test_shared_budget_protects_the_key(client, monkeypatch):
+def test_shared_budget_protects_the_key(client, monkeypatch, fake_dnse):
     monkeypatch.setattr(engine.budget, "per_minute", 7)
     monkeypatch.setattr(engine.budget, "reserved", 6)
-    monkeypatch.setattr(sources, "symbols", lambda: pd.DataFrame([{"symbol": "PDR"}]))
-    monkeypatch.setattr(sources, "index_list", lambda: pd.DataFrame([{"symbol": "VNINDEX"}]))
-    assert client.get("/symbols").status_code == 200
-    r = client.get("/indices")
+    fake_dnse({"/price/ohlc": {"t": [], "o": [], "h": [], "l": [], "c": [], "v": []}})
+    assert client.get("/stock/PDR/history").status_code == 200
+    r = client.get("/stock/VNM/history")
     assert r.status_code == 429 and r.headers["retry-after"] == "15"
 
 
-def test_dnse_order_book_main_board_in_thousand_vnd(monkeypatch):
-    # Real DNSE shape (2026-11-09 PDR): odd-lot row first, round-lot row second, prices in VND
-    raw = pd.DataFrame([
-        {"bid_price_1": 11600.0, "bid_vol_1": 37, "ask_price_1": 11650.0, "ask_vol_1": 22, "time": "a"},
-        {"bid_price_1": 11600.0, "bid_vol_1": 3970, "ask_price_1": 11650.0, "ask_vol_1": 48090, "time": "b"},
-    ])
-
-    class M:
-        def equity(self, _s):
-            return type("E", (), {"order_book": lambda self: raw})()
-    monkeypatch.setattr(settings, "QUOTE_SOURCE", "dnse")
-    monkeypatch.setattr(sources, "market", lambda _src: M())
-    out = sources.order_book("PDR")
-    assert len(out) == 1 and out["time"][0] == "b"
-    assert out["bid_price_1"][0] == 11.6 and out["ask_vol_1"][0] == 48090
-
-
-def test_foreign_flow_keeps_daily_total(monkeypatch):
-    raw = frame([{"time": "2026-11-06", "buy_vol": 330187.0}, {"time": "2026-11-06", "buy_vol": 46700.0},
-                 {"time": "2026-11-05", "buy_vol": 497500.0}, {"time": "2026-11-05", "buy_vol": 0.0}])
-
-    class M:
-        def equity(self, _s):
-            return type("E", (), {"foreign_flow": lambda self, **_: raw})()
-    monkeypatch.setattr(sources, "market", lambda _src: M())
-    out = sources.foreign_flow("PDR", "2026-11-05", None)
-    assert list(out["buy_vol"]) == [497500.0, 330187.0]
-
-
-def test_records_keep_vietnam_dates():
-    df = pd.DataFrame({"listing_date": pd.to_datetime(["2009-06-30"]).tz_localize("Asia/Ho_Chi_Minh")})
-    assert api.records(df)[0]["listing_date"].startswith("2009-06-30")
+def test_status_reports_key_and_limits(client, monkeypatch, fake_dnse):
+    monkeypatch.setenv("DNSE_API_KEY", "k")
+    monkeypatch.setenv("DNSE_API_SECRET", "s")
+    fake = fake_dnse({})
+    fake.limits["/price/ohlc"] = {"limit": 100000, "remaining": 99006}
+    body = client.get("/status").json()
+    assert body["keyConfigured"] is True and body["dnseLimits"]["/price/ohlc"]["remaining"] == 99006
 
 
 def test_removed_endpoints_are_gone(client):
-    assert client.get("/macro/gdp").status_code == 404
-    assert client.get("/stock/PDR/financials/ratio").status_code == 422
-    assert client.get("/stock/PDR/company/officers").status_code == 422
+    for path in ("/stock/PDR/company", "/stock/PDR/financials/income_statement", "/indices",
+                 "/index/VN30/members", "/groups/VN30/symbols", "/stock/PDR/trades"):
+        assert client.get(path).status_code == 404, path
 
 
 def test_docs_toggle():
@@ -140,17 +145,60 @@ def test_docs_toggle():
 
 @pytest.mark.parametrize("path, fn", [
     ("/stock/PDR/foreign-flow", "foreign_flow"),
-    ("/stock/PDR/history", "ohlcv"),
-    ("/index/VNINDEX/history", "ohlcv"),
+    ("/stock/PDR/history", "candles"),
+    ("/index/VNINDEX/history", "candles"),
 ])
 def test_start_and_end_are_separate_parameters(client, monkeypatch, path, fn):
     seen = []
 
     def spy(*args):
         seen.append(args)
-        return pd.DataFrame()
+        return []
     monkeypatch.setattr(sources, fn, spy)
     client.get(f"{path}?start=2026-11-03")
     client.get(f"{path}?start=2026-11-03&end=2026-11-06")
     start_end = [a[1:3] if fn == "foreign_flow" else a[2:4] for a in seen]
     assert start_end == [("2026-11-03", None), ("2026-11-03", "2026-11-06")]
+
+
+# ---------------------------------------------------------------- the DNSE client itself
+
+def test_signature_follows_dnse_docs():
+    import base64, hashlib, hmac
+    date, nonce = "Fri, 15 May 2026 07:11:30 GMT", "0123456789abcdef0123456789abcdef"
+    headers = dnse.signed_headers("KEY", "SECRET", "GET", "/price/ohlc", date=date, nonce=nonce)
+    expected = base64.b64encode(hmac.new(b"SECRET", (
+        "(request-target): get /price/ohlc\ndate: " + date + "\nnonce: " + nonce).encode(), hashlib.sha256).digest()).decode()
+    expected = expected.replace("+", "%2B").replace("/", "%2F").replace("=", "%3D")
+    assert headers["x-api-key"] == "KEY" and headers["Date"] == date and headers["version"] == dnse.API_VERSION
+    assert headers["X-Signature"] == (f'Signature keyId="KEY",algorithm="hmac-sha256",headers="(request-target) date",'
+                                      f'signature="{expected}",nonce="{nonce}"')
+
+
+@pytest.mark.parametrize("status, body, error", [
+    (429, '{"error": "Rate Limit Exceeded"}', dnse.RateLimited),
+    (403, '{"status": "error", "message": "Quota exceeded", "code": "OA-401"}', dnse.QuotaExceeded),
+    (400, '{"code": "OA-400", "message": "Authorization field missing, malformed or invalid"}', dnse.AuthFailed),
+    (502, "bad gateway", dnse.DnseError),
+])
+def test_client_maps_dnse_status_codes(status, body, error):
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, text=body))
+    with pytest.raises(error):
+        dnse.Client("k", "s", transport=transport).get("/price/ohlc")
+
+
+def test_client_signs_the_path_and_records_limits():
+    seen = {}
+
+    def handler(request):
+        seen["path"], seen["sig"] = request.url.path, request.headers["X-Signature"]
+        return httpx.Response(200, json={"ok": 1}, headers={"X-RateLimit-Limit": "10000", "X-RateLimit-Remaining": "9993"})
+    client = dnse.Client("k", "s", transport=httpx.MockTransport(handler))
+    assert client.get("/price/PDR/secdef", {"boardId": "G1"}) == {"ok": 1}
+    assert seen["path"] == "/price/PDR/secdef" and 'keyId="k"' in seen["sig"]
+    assert client.limits == {"/price/{symbol}/secdef": {"limit": 10000, "remaining": 9993}}
+
+
+def test_client_without_key_fails_clearly():
+    with pytest.raises(dnse.NotConfigured):
+        dnse.Client("", "").get("/price/ohlc")

@@ -2,6 +2,25 @@
 
 Định dạng theo [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/), đánh số phiên bản theo [SemVer](https://semver.org/lang/vi/).
 
+## [5.0.0] - 2026-11-10
+
+### Thay đổi lớn
+- **Gọi thẳng DNSE Lightspeed API, bỏ vnstock.** vnstock 6 dùng giấy phép riêng (không phải mã nguồn mở, cấm dùng làm dịch vụ/API cho người khác) và bản rc hết hạn theo năm. Client DNSE mới (`dnse.py`, ~150 dòng) viết theo tài liệu công khai của DNSE: ký HMAC-SHA256, không phiên, không OTP.
+- Chỉ còn 3 thư viện: `fastapi`, `uvicorn`, `httpx`. Bỏ `vnstock`, `vnstock-oapi`, `pandas`, `redis`.
+- Chỉ còn một nguồn là DNSE. Bỏ `DATA_SOURCE`, `QUOTE_SOURCE`, `COMPANY_SOURCE`, `INDEX_SOURCE`, `SSI_*`, `FHSC_*`, `REDIS_URL`, `CACHE_NAMESPACE`, `CACHE_TTL_REFERENCE`, `VNSTOCK_TELEMETRY`.
+- Bỏ các endpoint DNSE không có: `/stock/{mã}/company*`, `/stock/{mã}/financials/*`, `/stock/{mã}/trades`, `/index/{mã}/members`, `/indices`, `/groups/{nhóm}/symbols`. Bỏ khung nến `1M`.
+- `/stock/{mã}/quote`: định dạng mới `bid`/`ask` dạng danh sách `{price, volume}`, thêm `status`; khối lượng tính bằng cổ phiếu.
+- `/stock/{mã}/foreign-flow`: định dạng mới, mỗi ngày một dòng `buy_volume`, `sell_volume`, `net_volume`, `buy_value`, `sell_value`, `net_value`, `room`.
+- `/status`: thay thông tin vnstock bằng `keyConfigured`, `apiVersion` và hạn mức DNSE còn lại (`dnseLimits`).
+- `BUDGET_PER_MINUTE` mặc định 60 (hạn mức DNSE rộng hơn nhiều).
+
+### Sửa
+- Trong phiên, `/stock/*` trả đúng phiên hôm nay: DNSE chỉ thêm nến ngày sau khi phiên kết thúc, nên bản 4.x lấy nhầm phiên hôm trước làm "hôm nay" (sai giá tham chiếu, trần/sàn, thay đổi). Giờ phiên hôm nay và giá hiện tại lấy từ lệnh khớp lô chẵn mới nhất, cùng một lượt gọi.
+- `NAMES_FILE` có giá trị `NaN` (xuất từ pandas) không còn làm `/stock/{mã}` và `/symbols` lỗi 500.
+
+### Không đổi
+- `/stock/{mã}`, `/stock/{mã}/recent`, `/stocks`, `/stock/{mã}/day-range`, `/health` giữ nguyên định dạng (kiểm bằng `tests/test_contract.py`).
+
 ## [4.1.0] - 2026-11-09
 
 ### Thêm

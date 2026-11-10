@@ -1,186 +1,174 @@
-"""Every call to vnstock lives here, so tests can swap this module for fakes.
+"""DNSE answers -> the plain dicts this API works with. The only module that knows DNSE's field names.
 
-Functions run in worker threads (vnstock is synchronous). Prices from Market.*.ohlcv and
-trades are in thousand VND, like vnstock 5.
+Prices are in thousand VND (11.75 = 11,750 VND), like DNSE returns them. Volumes are in shares.
 """
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
-import pandas as pd
-from vnstock import Fundamental, Market, Reference
+import dnse
 
-from config import settings
-
-# Exchange names vary by source; the API always answers with these three
-EXCHANGE_ALIASES = {"HSX": "HOSE", "HOSE": "HOSE", "HNX": "HNX", "UPCOM": "UPCOM", "UPC": "UPCOM"}
-LISTED_TYPES = {"stock", "etf", "fund", "fund_certificate"}
-
-_market: Dict[str, Market] = {}
-_reference: Dict[str, Reference] = {}
-
-
-def market(source: str) -> Market:
-    if source not in _market:
-        _market[source] = Market(source)
-    return _market[source]
-
-
-def reference(source: str) -> Reference:
-    if source not in _reference:
-        _reference[source] = Reference(source)
-    return _reference[source]
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+EXCHANGES = {"STO": "HOSE", "STX": "HNX", "UPX": "UPCOM"}
+LISTED_GROUPS = {"ST": "stock", "EF": "fund", "MF": "fund"}   # stocks, ETFs, closed-end funds
+MAIN_BOARD = "G1"            # round lots; G4 odd lots, T* put-through
+# Round-lot quantities in trades/latest and quotes/latest come in units of 10 shares
+# (checked against the 1-minute candles on HOSE and HNX, 2026-11-10)
+LOT_UNIT = 10
+INDEX_NAMES = {"HNXINDEX": "HNX", "UPCOMINDEX": "UPCOM"}
+RESOLUTIONS = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "1H": "1H", "1D": "1D", "1W": "1W"}
+# How far back to look when only `limit` is given
+LOOKBACK_DAYS = {"1m": 5, "5m": 20, "15m": 45, "30m": 90, "1H": 180, "1D": 1500, "1W": 3650}
+INSTRUMENT_PAGE = 100        # DNSE's largest page
+MAX_FOREIGN_DAYS = 31        # one request per day
 
 
-def _naive_local(value) -> datetime:
-    """Timestamp -> naive datetime in Vietnam time (the server clock the API compares with)."""
-    ts = pd.Timestamp(value)
-    if ts.tzinfo is not None:
-        ts = ts.tz_convert("Asia/Ho_Chi_Minh").tz_localize(None)
-    return ts.to_pydatetime()
+def _epoch(day: str, end_of_day: bool = False) -> int:
+    start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=VN_TZ)
+    return int((start + timedelta(days=1, seconds=-1) if end_of_day else start).timestamp())
+
+
+def _local(epoch: int) -> datetime:
+    return datetime.fromtimestamp(epoch, VN_TZ).replace(tzinfo=None)
+
+
+def _parse_time(value: str) -> Optional[datetime]:
+    """DNSE time strings ("2026-11-10 10:51:59.953") are Vietnam time."""
+    try:
+        return datetime.strptime(value[:19], "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def _main_board(rows: list) -> Optional[dict]:
+    return next((r for r in rows or [] if r.get("boardId") == MAIN_BOARD), None)
+
+
+def _ohlc(symbol: str, kind: str, resolution: str, start: int, end: int) -> List[dict]:
+    body = dnse.client().get("/price/ohlc", {"symbol": symbol, "type": kind, "resolution": resolution,
+                                             "from": start, "to": end})
+    keys = ("t", "o", "h", "l", "c", "v")
+    columns = [body.get(k) or [] for k in keys]
+    return [{"t": t, "open": o, "high": h, "low": l, "close": c, "volume": int(v)}
+            for t, o, h, l, c, v in zip(*columns)]
 
 
 # ---------------------------------------------------------------- /stock/* engine
 
 def daily_bars(symbol: str, start: str, end: str) -> List[dict]:
-    """Daily sessions, oldest first. Empty list = the source has no data for this symbol."""
-    df = market(settings.DATA_SOURCE).equity(symbol).ohlcv(start=start, end=end, interval="1D")
-    if df is None or df.empty:
-        return []
-    df = df.sort_values("time", ascending=True)
-    return [{
-        "date": _naive_local(row["time"]).strftime("%Y-%m-%d"),
-        "open": float(row["open"]),
-        "high": float(row["high"]),
-        "low": float(row["low"]),
-        "close": float(row["close"]),
-        "volume": int(row["volume"]),
-    } for _, row in df.iterrows()]
+    """Daily sessions, oldest first. DNSE adds a session's bar only after it ends."""
+    rows = _ohlc(symbol, "STOCK", "1D", _epoch(start), _epoch(end, True))
+    return [{"date": _local(r["t"]).strftime("%Y-%m-%d"), "open": float(r["open"]), "high": float(r["high"]),
+             "low": float(r["low"]), "close": float(r["close"]), "volume": r["volume"]} for r in rows]
 
 
-def last_trade(symbol: str) -> Optional[Tuple[float, Optional[datetime]]]:
-    """(price, time) of the latest match, from the last 1-minute candle.
+def latest_trade(symbol: str) -> Optional[dict]:
+    """The session of the last round-lot match: open/high/low so far, last price, volume, time.
 
-    Not from trades(): DNSE pages the tape from the start of the session, so reaching the last
-    trade takes seconds (up to 500 pages late in the day). The last 1m candle's close is the
-    last matched price and costs one small call.
+    One call gives today's bar while the session runs (the daily history stops at yesterday).
+    None if the symbol has no match yet.
     """
-    df = market(settings.DATA_SOURCE).equity(symbol).ohlcv(interval="1m", limit=1)
-    if df is None or df.empty:
+    row = _main_board(dnse.client().get(f"/price/{symbol}/trades/latest").get("trades"))
+    at = _parse_time(row.get("time")) if row else None
+    if not row or at is None or not row.get("openPrice") or not row.get("matchPrice"):
         return None
-    df = df.sort_values("time", ascending=True)
-    return float(df["close"].iloc[-1]), _naive_local(df["time"].iloc[-1])
-
-
-def text(value) -> Optional[str]:
-    """Cell -> stripped string, or None for empty / NaN / pd.NA (vnstock 6 uses nullable dtypes)."""
-    if value is None or (not isinstance(value, str) and pd.isna(value)):
-        return None
-    value = str(value).strip()
-    return value or None
-
-
-def normalize_exchange(raw) -> Optional[str]:
-    return EXCHANGE_ALIASES.get((text(raw) or "").upper())
+    return {"date": at.strftime("%Y-%m-%d"), "open": float(row["openPrice"]), "high": float(row["highestPrice"]),
+            "low": float(row["lowestPrice"]), "close": float(row["matchPrice"]),
+            "volume": int(row["totalVolumeTraded"]) * LOT_UNIT, "at": at}
 
 
 def listing() -> Dict[str, dict]:
-    """Listed stocks and ETFs: symbol -> {"name", "nameEn", "exchange", "type"}."""
-    ref = reference(settings.DATA_SOURCE)
-    frames = [ref.equity.list(), ref.etf.list()]
+    """Listed stocks and funds: symbol -> {"name", "nameEn", "exchange", "type"}."""
     out: Dict[str, dict] = {}
-    for frame in frames:
-        if frame is None or frame.empty:
-            continue
-        for _, row in frame.iterrows():
-            kind = (text(row.get("type")) or "").lower()
-            exchange = normalize_exchange(row.get("exchange"))
-            symbol = (text(row.get("symbol")) or "").upper()
-            if kind not in LISTED_TYPES or exchange is None or not symbol:
-                continue
-            out[symbol] = {
-                "name": text(row.get("organ_name")) or symbol,
-                "nameEn": text(row.get("name_en")),
-                "exchange": exchange,
-                "type": "stock" if kind == "stock" else "fund",
-            }
+    page = 1
+    while True:
+        body = dnse.client().get("/market/instruments", {"page": page, "pageSize": INSTRUMENT_PAGE})
+        for row in body.get("data") or []:
+            exchange = EXCHANGES.get(row.get("marketId"))
+            kind = LISTED_GROUPS.get(row.get("securityGroupId"))
+            symbol = (row.get("symbol") or "").strip().upper()
+            if exchange and kind and symbol:
+                out[symbol] = {"name": (row.get("name") or row.get("shortName") or symbol).strip(),
+                               "nameEn": None, "exchange": exchange, "type": kind}
+        total = body.get("total") or 0
+        if page * INSTRUMENT_PAGE >= total or not body.get("data"):
+            return out
+        page += 1
+
+
+# ---------------------------------------------------------------- other endpoints
+
+def candles(kind: str, symbol: str, start: Optional[str], end: Optional[str], interval: str,
+            limit: Optional[int]) -> List[dict]:
+    """OHLCV candles, oldest first. kind = "stock" or "index"."""
+    today = datetime.now(VN_TZ).strftime("%Y-%m-%d")
+    end = end or today
+    if not start:
+        start = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=LOOKBACK_DAYS[interval])).strftime("%Y-%m-%d")
+        limit = limit or 100
+    if kind == "index":
+        symbol = INDEX_NAMES.get(symbol, symbol)
+    rows = _ohlc(symbol, "INDEX" if kind == "index" else "STOCK", RESOLUTIONS[interval],
+                 _epoch(start), _epoch(end, True))
+    daily = interval in ("1D", "1W")
+    out = [{"time": _local(r["t"]).strftime("%Y-%m-%d") if daily else _local(r["t"]).isoformat(),
+            "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"], "volume": r["volume"]}
+           for r in rows]
+    return out[-limit:] if limit else out
+
+
+def price_board(symbol: str) -> Optional[dict]:
+    """Official reference/ceiling/floor of the day + 3 best bid/ask levels (main board)."""
+    limits = _main_board(dnse.client().get(f"/price/{symbol}/secdef"))
+    book = _main_board(dnse.client().get(f"/price/{symbol}/quotes/latest").get("quotes"))
+    if not limits and not book:
+        return None
+
+    def levels(side):
+        return [{"price": x["price"], "volume": int(x["quantity"]) * LOT_UNIT} for x in (book or {}).get(side) or []]
+
+    stamp = _parse_time((limits or {}).get("time"))
+    return {
+        "symbol": symbol,
+        "exchange": EXCHANGES.get((limits or book).get("marketId")),
+        "trading_date": stamp.strftime("%Y-%m-%d") if stamp else None,
+        "reference_price": (limits or {}).get("basicPrice"),
+        "ceiling_price": (limits or {}).get("ceilingPrice"),
+        "floor_price": (limits or {}).get("floorPrice"),
+        "status": (limits or {}).get("securityStatus"),
+        "bid": levels("bid"),
+        "ask": levels("offer"),
+        "time": _parse_time(book["time"]).isoformat() if book and _parse_time(book.get("time")) else None,
+    }
+
+
+def foreign_flow(symbol: str, start: Optional[str], end: Optional[str]) -> List[dict]:
+    """Foreign buy/sell per day (shares and VND), oldest first. One request per weekday."""
+    last = datetime.strptime(end, "%Y-%m-%d") if end else datetime.now(VN_TZ).replace(tzinfo=None)
+    first = datetime.strptime(start, "%Y-%m-%d") if start else last - timedelta(days=9)
+    first = max(first, last - timedelta(days=MAX_FOREIGN_DAYS - 1))
+    out = []
+    day = first
+    while day <= last:
+        if day.weekday() < 5:
+            stamp = day.strftime("%Y-%m-%d")
+            body = dnse.client().get(f"/price/{symbol}/foreign-trading",
+                                     {"from": _epoch(stamp), "to": _epoch(stamp, True), "limit": 1})
+            rows = body.get("foreigners") or []
+            if rows:   # newest first, totals are cumulative for the day
+                r = rows[0]
+                buy, sell = int(r.get("totalBuyVolume") or 0), int(r.get("totalSellVolume") or 0)
+                buy_value, sell_value = int(r.get("totalBuyTradedAmount") or 0), int(r.get("totalSellTradedAmount") or 0)
+                out.append({"date": stamp, "buy_volume": buy, "sell_volume": sell, "net_volume": buy - sell,
+                            "buy_value": buy_value, "sell_value": sell_value, "net_value": buy_value - sell_value,
+                            "room": r.get("foreignerBuyPossibleQuantity")})
+        day += timedelta(days=1)
     return out
 
 
-# ---------------------------------------------------------------- other endpoints (DataFrames)
-
-def ohlcv(kind: str, symbol: str, start=None, end=None, interval="1D", limit=None) -> pd.DataFrame:
-    target = getattr(market(settings.DATA_SOURCE), kind)(symbol)
-    kwargs = {"start": start, "end": end, "interval": interval}
-    if limit:
-        kwargs["limit"] = limit
-    return target.ohlcv(**kwargs)
-
-
-def price_limits(symbol: str) -> pd.DataFrame:
-    """Official reference/ceiling/floor for today, one row per board (G1 = main board)."""
-    return reference(settings.DATA_SOURCE).equity(symbol).price_limits()
-
-
-ORDER_BOOK_PRICES = [f"{side}_price_{i}" for side in ("bid", "ask") for i in (1, 2, 3)]
-ORDER_BOOK_VOLUMES = [f"{side}_vol_{i}" for side in ("bid", "ask") for i in (1, 2, 3)]
-
-
-def order_book(symbol: str) -> pd.DataFrame:
-    """3 best bid/ask levels of the main board, prices in thousand VND.
-
-    DNSE returns one row per board (odd lot and round lot) without naming it, and prices in VND:
-    keep the row with the most volume (round lot) and divide prices by 1000.
-    """
-    df = market(settings.QUOTE_SOURCE).equity(symbol).order_book()
-    if df is None or df.empty or settings.QUOTE_SOURCE != "dnse":
-        return df
-    df = df.copy()
-    volumes = [c for c in ORDER_BOOK_VOLUMES if c in df.columns]
-    if volumes and len(df) > 1:
-        df = df.loc[[df[volumes].fillna(0).sum(axis=1).idxmax()]]
-    for col in ORDER_BOOK_PRICES:
-        if col in df.columns:
-            df[col] = (df[col] / 1000).round(2)
-    return df.reset_index(drop=True)
-
-
-def board(symbols: List[str]) -> pd.DataFrame:
-    """Full price board (fhsc/tcbs only)."""
-    return market(settings.QUOTE_SOURCE).equity.quote(",".join(symbols))
-
-
-def trades(symbol: str, limit: int) -> pd.DataFrame:
-    return market(settings.DATA_SOURCE).equity(symbol).trades(limit=limit)
-
-
-def foreign_flow(symbol: str, start=None, end=None) -> pd.DataFrame:
-    """Foreign buy/sell per day. DNSE sends the day's total first, then the day's single trades:
-    keep the first row of each day."""
-    df = market(settings.DATA_SOURCE).equity(symbol).foreign_flow(start=start, end=end, interval="1D")
-    if df is None or df.empty or "time" not in df.columns:
-        return df
-    return df.drop_duplicates(subset=["time"], keep="first").sort_values("time").reset_index(drop=True)
-
-
-def symbols() -> pd.DataFrame:
-    return reference(settings.DATA_SOURCE).equity.list()
-
-
-def company(symbol: str, section: str) -> pd.DataFrame:
-    return getattr(reference(settings.COMPANY_SOURCE).company(symbol), section)()
-
-
-def financial(symbol: str, report: str, period: Optional[str]) -> pd.DataFrame:
-    return getattr(Fundamental(settings.COMPANY_SOURCE).equity(symbol), report)(period=period)
-
-
-def index_list() -> pd.DataFrame:
-    return reference(settings.INDEX_SOURCE).index.list()
-
-
-def index_members(symbol: str) -> pd.DataFrame:
-    return reference(settings.INDEX_SOURCE).index(symbol).members()
-
-
-def group_members(group: str) -> pd.DataFrame:
-    return reference(settings.INDEX_SOURCE).equity.by_group(group)
+def foreign_days(start: Optional[str], end: Optional[str]) -> int:
+    """Upstream calls foreign_flow will make (for the budget)."""
+    last = datetime.strptime(end, "%Y-%m-%d") if end else datetime.now(VN_TZ).replace(tzinfo=None)
+    first = datetime.strptime(start, "%Y-%m-%d") if start else last - timedelta(days=9)
+    first = max(first, last - timedelta(days=MAX_FOREIGN_DAYS - 1))
+    return max(1, sum(1 for i in range((last - first).days + 1) if (first + timedelta(days=i)).weekday() < 5))

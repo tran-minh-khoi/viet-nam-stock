@@ -20,6 +20,5 @@ labels: bug
 **Môi trường**
 - Cách chạy: Docker / PM2 / Python
 - Hệ điều hành:
-- Cấp tài khoản vnstock (`tier` trong /status):
 
-<!-- ⚠️ Đừng dán VNSTOCK_API_KEY -->
+<!-- ⚠️ Đừng dán DNSE_API_KEY / DNSE_API_SECRET -->
