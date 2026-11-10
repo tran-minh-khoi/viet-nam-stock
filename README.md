@@ -74,6 +74,11 @@ python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
 ./start.sh                # hoặc: pm2 start ecosystem.config.js
 ```
 
+**Railway / Render / Fly**: deploy thẳng từ repo, Dockerfile tự đọc biến `PORT` của nền tảng.
+
+1. Thêm biến `DNSE_API_KEY`, `DNSE_API_SECRET` (và `PRIORITY_SYMBOLS` nếu cần).
+2. Tuỳ chọn, để giữ dữ liệu qua mỗi lần deploy: gắn volume vào `/data`, đặt `SNAPSHOT_FILE=/data/snapshot.json`. Trên Railway, đặt thêm `RAILWAY_RUN_UID=0` để app ghi được vào volume.
+
 ### 3. Thử
 
 Mở **http://localhost:8000/docs** để bấm thử từng endpoint, hoặc:

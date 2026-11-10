@@ -11,14 +11,17 @@ RUN pip install -r requirements.txt
 
 COPY api.py config.py dnse.py engine.py sources.py ./
 
-# Run as a normal user; /data keeps the snapshot (last good data) across restarts
+# Run as a normal user. /data is where a volume can keep the snapshot (SNAPSHOT_FILE) across
+# restarts: docker-compose.yml mounts one; on Railway add a Volume at /data instead (no VOLUME here,
+# Railway refuses it).
 RUN useradd --create-home --uid 1000 app && mkdir -p /data && chown -R app /data
 USER app
-VOLUME /data
 
+# PORT is set by hosts like Railway/Render/Fly; 8000 otherwise
+ENV PORT=8000
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health', timeout=4)"
 
 # One worker on purpose: the /stock/* cache and the upstream budget live in the process.
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+CMD ["sh", "-c", "exec uvicorn api:app --host 0.0.0.0 --port \"$PORT\" --proxy-headers"]

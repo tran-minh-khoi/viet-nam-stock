@@ -10,6 +10,8 @@ services:
       - path: .env
         required: false
     environment:
+      # PORT in .env is the port on your computer; inside the container the app listens on 8000
+      PORT: "8000"
       # Last good data survives restarts (on the stock-data volume)
       SNAPSHOT_FILE: ${SNAPSHOT_FILE:-/data/snapshot.json}
     volumes:
